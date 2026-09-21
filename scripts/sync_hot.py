@@ -16,7 +16,18 @@ from pathlib import Path
 # Task 3 adds a policy JSON that must ride along with the hot tree even though
 # it does not live under plugin/hooks/verdict_hot/. Each entry is
 # (absolute source path, path relative to `dst`).
-EXTRA_FILES: tuple[tuple[Path, str], ...] = ()
+#
+# policy.load_policy() looks for the packaged default at
+# `Path(__file__).parent / "default_policy.json"` first (the CLI/src layout);
+# this is the file that makes that branch true once synced. The plugin
+# layout falls back to plugin/policies/default.json directly, so that file
+# is never duplicated under plugin/hooks/verdict_hot/ itself -- `make check`
+# compares the two copies with a separate `diff`, not the `diff -r` over the
+# hot tree (see Makefile).
+_ROOT = Path(__file__).resolve().parents[1]
+EXTRA_FILES: tuple[tuple[Path, str], ...] = (
+    (_ROOT / "plugin" / "policies" / "default.json", "default_policy.json"),
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SRC = ROOT / "plugin" / "hooks" / "verdict_hot"

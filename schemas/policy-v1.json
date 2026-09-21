@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Verdict policy v1",
+  "description": "Shape of plugin/policies/default.json and a user's ~/.verdict/policy.json override (task-3-brief.md).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["policy_version", "mode", "store", "never_send", "checks", "soft_failure", "claims"],
+  "properties": {
+    "policy_version": { "type": "string" },
+    "mode": { "type": "string" },
+    "store": {
+      "type": "object",
+      "required": [
+        "retention_days",
+        "excerpt_head",
+        "excerpt_tail",
+        "input_excerpt_max",
+        "error_head",
+        "error_tail",
+        "prompt_max_chars",
+        "final_message_max_chars"
+      ],
+      "properties": {
+        "retention_days": { "type": "integer" },
+        "excerpt_head": { "type": "integer" },
+        "excerpt_tail": { "type": "integer" },
+        "input_excerpt_max": { "type": "integer" },
+        "error_head": { "type": "integer" },
+        "error_tail": { "type": "integer" },
+        "prompt_max_chars": { "type": "integer" },
+        "final_message_max_chars": { "type": "integer" }
+      }
+    },
+    "never_send": {
+      "type": "object",
+      "required": ["path_globs", "bash_patterns"],
+      "properties": {
+        "path_globs": { "type": "array", "items": { "type": "string" } },
+        "bash_patterns": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "required": ["runner_patterns", "extra"],
+      "properties": {
+        "runner_patterns": { "type": "array", "items": { "type": "string" } },
+        "extra": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "soft_failure": {
+      "type": "object",
+      "required": ["output_patterns", "masking_patterns", "http_error_patterns", "tools"],
+      "properties": {
+        "output_patterns": { "type": "array", "items": { "type": "string" } },
+        "masking_patterns": { "type": "array", "items": { "type": "string" } },
+        "http_error_patterns": { "type": "array", "items": { "type": "string" } },
+        "tools": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": ["success_verbs", "max_claims"],
+      "properties": {
+        "success_verbs": { "type": "array", "items": { "type": "string" } },
+        "max_claims": { "type": "integer" }
+      }
+    }
+  }
+}

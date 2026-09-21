@@ -1,0 +1,98 @@
+{
+  "policy_version": "2026.09.1",
+  "mode": "shadow",
+  "store": {
+    "retention_days": 45,
+    "excerpt_head": 4096,
+    "excerpt_tail": 4096,
+    "input_excerpt_max": 300,
+    "error_head": 300,
+    "error_tail": 2000,
+    "prompt_max_chars": 6000,
+    "final_message_max_chars": 8000
+  },
+  "never_send": {
+    "path_globs": [
+      "**/.env*",
+      "**/*.pem",
+      "**/id_rsa*",
+      "**/id_ed25519*",
+      "~/.aws/credentials",
+      "~/.ssh/**",
+      "**/.npmrc",
+      "**/.netrc",
+      "**/.git-credentials",
+      "**/.pypirc",
+      "**/secrets*.y*ml"
+    ],
+    "bash_patterns": [
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*\\.env(\\.[\\w.-]+)?\\b",
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*\\.pem\\b",
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*id_(rsa|ed25519)[^\\n]*\\b",
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*\\.aws/credentials\\b",
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*\\.ssh/[^\\s]+\\b",
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*\\.npmrc\\b",
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*\\.netrc\\b",
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*\\.git-credentials\\b",
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*\\.pypirc\\b",
+      "\\b(cat|less|more|head|tail|tac|nl|strings|xxd|od|hexdump|vim|vi|nano|type)\\b[^\\n]*secrets[^\\n]*\\.ya?ml\\b"
+    ]
+  },
+  "checks": {
+    "runner_patterns": [
+      "^pytest\\b",
+      "^jest\\b",
+      "^vitest\\b",
+      "^go\\s+test\\b",
+      "^cargo\\s+test\\b",
+      "^npm\\s+test\\b",
+      "^make\\s+(test|check|verify)\\b",
+      "^ruff\\b",
+      "^mypy\\b",
+      "^tsc\\b",
+      "^eslint\\b"
+    ],
+    "extra": []
+  },
+  "soft_failure": {
+    "output_patterns": [
+      "FAIL",
+      "FAILED",
+      "Traceback",
+      "AssertionError",
+      "panic:",
+      "npm ERR!",
+      "error TS\\d+",
+      "\\d+ (failed|failing|errors?)"
+    ],
+    "masking_patterns": [
+      "\\|\\|\\s*true\\b",
+      ";\\s*true\\b",
+      "\\bset\\s+\\+e\\b",
+      "2>\\s*/dev/null",
+      "\\|\\s*(tail|tee|head)\\b"
+    ],
+    "http_error_patterns": [
+      "HTTP/\\d(?:\\.\\d)?\"?\\s+[45]\\d\\d\\b",
+      "\\bstatus(?:_code)?[\"']?\\s*[:=]\\s*[45]\\d\\d\\b"
+    ],
+    "tools": ["Bash", "Agent", "WebFetch"]
+  },
+  "claims": {
+    "success_verbs": [
+      "implemented",
+      "fixed",
+      "passing",
+      "pass",
+      "deployed",
+      "created",
+      "verified",
+      "works",
+      "resolved",
+      "added",
+      "updated",
+      "completed"
+    ],
+    "max_claims": 6
+  }
+}

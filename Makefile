@@ -17,7 +17,8 @@ check:
 	uv run ruff format --check .
 	uv run mypy
 	uv run mypy --python-version 3.9 plugin/hooks
-	diff -r --exclude=__pycache__ plugin/hooks/verdict_hot src/agent_verdict/verdict_hot
+	diff -r --exclude=__pycache__ --exclude=default_policy.json plugin/hooks/verdict_hot src/agent_verdict/verdict_hot
+	diff plugin/policies/default.json src/agent_verdict/verdict_hot/default_policy.json
 	uv run pytest tests/test_findings_ledger.py tests/test_import_ban.py tests/unit/test_ledger.py
 
 test:
