@@ -116,3 +116,9 @@ Entries D-001 to D-021 were made during planning on 2026-09-20, before any code 
 **Decision.** Keep the rule for the first G0.2 run only. Immediately after that run, replace it with an exact allowlist per provider built from the observed `models_returned` values, add a test for the superstring case, and record the ids in `docs/VERIFIED_FACTS.md`. Do not tag `m0` before this is done.
 **Cost if wrong.** A variant model could pass the latency gate once; no product code depends on it.
 **Resolved 2026-09-21.** The first live run returned exactly `typesafe/jev-1.13-20260917` from OpenRouter (30 of 30 calls), so the check is now exact equality. The TypeSafe direct id is still unobserved; if its returned id differs from `jev-1.13.0`, record the observed id in VERIFIED_FACTS and pin that instead.
+
+### D-025 OpenRouter is the default provider; gate G0.2 passed
+**Context.** O-4 left the default provider to the M0 benchmark. On 2026-09-21 OpenRouter measured total p50 180 ms and p90 265 ms over 30 calls (E6), far inside the 1,200 ms gate and inside the 2.5 s Stop budget with room for one retry.
+**Decision.** `openrouter` is the default preset. Stop blocking ships as designed (no fallback to record-and-flag). TypeSafe direct stays a supported preset and gets benchmarked if the owner obtains a key.
+**Note for M6.** At a p90 near 265 ms, a PreToolUse Jev gate would fit a 600 ms budget on this provider. That removes the latency objection in D-007 but not the egress, redundancy, and evaluation objections, so D-007 stands.
+**Before going public (M2).** `docs/research/` and `docs/superpowers/` contain the owner's home directory path. Scrub or drop them before the repository is made public.

@@ -1,0 +1,313 @@
+{
+ "date": "2026-09-21",
+ "n": 30,
+ "questions": 6,
+ "state_tokens": 1200,
+ "min_ok_ratio": 0.95,
+ "results": [
+  {
+   "provider": "openrouter",
+   "model_requested": "typesafe/jev-1.13-20260917",
+   "summary": {
+    "n": 30,
+    "n_ok": 30,
+    "errors": [],
+    "models_returned": [
+     "typesafe/jev-1.13-20260917"
+    ],
+    "conn_ms": {
+     "p50": 22.5,
+     "p90": 24.4,
+     "p99": 104.3
+    },
+    "infer_ms": {
+     "p50": 155.2,
+     "p90": 242.8,
+     "p99": 403.7
+    },
+    "total_ms": {
+     "p50": 179.7,
+     "p90": 265.3,
+     "p99": 424.8
+    },
+    "input_tokens_median": 2600.0
+   },
+   "samples": [
+    {
+     "conn_ms": 43.902042001718655,
+     "infer_ms": 228.6696670053061,
+     "total_ms": 272.57170900702477,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 22.60633301921189,
+     "infer_ms": 134.7271249978803,
+     "total_ms": 157.3334580170922,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 104.27504198742099,
+     "infer_ms": 117.23229198832996,
+     "total_ms": 221.50733397575095,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 22.933959000511095,
+     "infer_ms": 136.00399999995716,
+     "total_ms": 158.93795900046825,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 22.45041701826267,
+     "infer_ms": 118.87245799880475,
+     "total_ms": 141.32287501706742,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 22.175791003974155,
+     "infer_ms": 214.41612500348128,
+     "total_ms": 236.59191600745544,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 22.988458978943527,
+     "infer_ms": 219.28608301095665,
+     "total_ms": 242.27454198990017,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 21.636290999595076,
+     "infer_ms": 143.4527499950491,
+     "total_ms": 165.08904099464417,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 20.549667009618133,
+     "infer_ms": 335.35979100270197,
+     "total_ms": 355.9094580123201,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 24.17099999729544,
+     "infer_ms": 133.9721670083236,
+     "total_ms": 158.14316700561903,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 23.825291980756447,
+     "infer_ms": 145.5107080109883,
+     "total_ms": 169.33599999174476,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 36.662666010670364,
+     "infer_ms": 157.98495899070986,
+     "total_ms": 194.64762500138022,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 23.786457983078435,
+     "infer_ms": 190.75437501305714,
+     "total_ms": 214.54083299613558,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 21.68883301783353,
+     "infer_ms": 243.56274999445304,
+     "total_ms": 265.2515830122866,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 20.185833011055365,
+     "infer_ms": 131.28054200205952,
+     "total_ms": 151.46637501311488,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 20.14654199592769,
+     "infer_ms": 142.7497080003377,
+     "total_ms": 162.8962499962654,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 24.447749980026856,
+     "infer_ms": 155.21162500954233,
+     "total_ms": 179.6593749895692,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 19.990958011476323,
+     "infer_ms": 152.1266670024488,
+     "total_ms": 172.11762501392514,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 23.30016699852422,
+     "infer_ms": 156.90937501494773,
+     "total_ms": 180.20954201347195,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 18.841207987861708,
+     "infer_ms": 135.3999169950839,
+     "total_ms": 154.24112498294562,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 21.019082982093096,
+     "infer_ms": 208.51804199628532,
+     "total_ms": 229.53712497837842,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 23.380041995551437,
+     "infer_ms": 188.29091600491665,
+     "total_ms": 211.6709580004681,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 17.953167000086978,
+     "infer_ms": 176.47195799509063,
+     "total_ms": 194.4251249951776,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 23.941999999806285,
+     "infer_ms": 127.10970800253563,
+     "total_ms": 151.0517080023419,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 17.51462501124479,
+     "infer_ms": 127.71149998297915,
+     "total_ms": 145.22612499422394,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 18.764459004160017,
+     "infer_ms": 242.7912080020178,
+     "total_ms": 261.5556670061778,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 22.929082973860204,
+     "infer_ms": 226.71162500046194,
+     "total_ms": 249.64070797432214,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 21.145792008610442,
+     "infer_ms": 403.68512499844655,
+     "total_ms": 424.830917007057,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 23.723249993054196,
+     "infer_ms": 136.34058300522156,
+     "total_ms": 160.06383299827576,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    },
+    {
+     "conn_ms": 19.15391700458713,
+     "infer_ms": 159.5637499995064,
+     "total_ms": 178.71766700409353,
+     "status": 200,
+     "model_returned": "typesafe/jev-1.13-20260917",
+     "input_tokens": 2600,
+     "error": null
+    }
+   ],
+   "gate": {
+    "ok": true,
+    "reason": "ok ratio 1.00, model 'typesafe/jev-1.13-20260917', p90 265.3 ms"
+   }
+  }
+ ]
+}

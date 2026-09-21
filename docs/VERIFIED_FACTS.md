@@ -91,6 +91,7 @@ Sources: `https://code.claude.com/docs/en/hooks.md`, `.../plugins-reference.md`,
 | E3 | **TLS trap:** the python.org framework Python 3.14 that is first on PATH fails `CERTIFICATE_VERIFY_FAILED` against both providers, because its OpenSSL CA file does not exist. `/usr/bin/python3` 3.9.6, Homebrew 3.14, and uv 3.13 all succeed. Loading `/etc/ssl/cert.pem` when the default store is empty fixes it with verification still on. | O |
 | E4 | No `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, or `ANTHROPIC_API_KEY` was set as of 2026-09-20. | O |
 | E5 | With the D-012 fallback (load `/etc/ssl/cert.pem` when the default store is empty), the TLS-broken framework Python 3.14 connects to `openrouter.ai` in about 34 ms with verification on. | O |
+| E6 | **First live benchmark, 2026-09-21** (`docs/measurements/m0-2026-09-21.json`): OpenRouter, pinned `typesafe/jev-1.13-20260917`, 30 of 30 calls ok with a Stop-shaped payload of 6 questions and about 2,600 input tokens. Connection p50 22 ms, p90 24 ms. Inference p50 155 ms, p90 243 ms. Total p50 180 ms, p90 265 ms, p99 425 ms. The returned model id equaled the pinned id on every call. TypeSafe direct is still unmeasured (no key). | O |
 
 ## F. Prior art
 
