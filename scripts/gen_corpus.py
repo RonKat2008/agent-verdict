@@ -33,7 +33,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gen_corpus_negatives import NEGATIVE_CATEGORIES  # noqa: E402
+from gen_corpus_negatives import (  # noqa: E402
+    NEGATIVE_CATEGORIES,
+    NEGATIVE_COUNT_OVERRIDES,
+    OPAQUE_BLOB_CATEGORIES,
+)
 
 SEED = 20260921
 POSITIVES_PER_FAMILY = 16
@@ -367,12 +371,22 @@ def _make_positive(rng: random.Random, family: str, context_index: int) -> dict[
         "family": family,
         "context": context_name,
         "bare": is_bare,
+        "opaque_blob": False,  # D-026: only negatives can be opaque_blob
     }
 
 
 def _make_negative(rng: random.Random, category: str) -> dict[str, object]:
     text = NEGATIVE_CATEGORIES[category](rng)
-    return {"text": text, "secret": None, "family": category, "context": category, "bare": True}
+    return {
+        "text": text,
+        "secret": None,
+        "family": category,
+        "context": category,
+        "bare": True,
+        # D-026: set from the CATEGORY, never from whether the redactor
+        # happens to fire on this particular row.
+        "opaque_blob": category in OPAQUE_BLOB_CATEGORIES,
+    }
 
 
 def build_corpus() -> list[dict[str, object]]:
@@ -388,7 +402,8 @@ def build_corpus() -> list[dict[str, object]]:
         for i in range(POSITIVES_PER_FAMILY):
             rows.append(_make_positive(rng, family, order[i % len(order)]))
     for category in sorted(NEGATIVE_CATEGORIES):
-        for _ in range(NEGATIVES_PER_CATEGORY):
+        count = NEGATIVE_COUNT_OVERRIDES.get(category, NEGATIVES_PER_CATEGORY)
+        for _ in range(count):
             rows.append(_make_negative(rng, category))
     rng.shuffle(rows)
     return rows

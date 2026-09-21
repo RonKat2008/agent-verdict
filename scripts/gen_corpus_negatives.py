@@ -112,19 +112,65 @@ def _neg_base64_asset_labeled(rng: random.Random) -> str:
 def _neg_base64_asset_bare(rng: random.Random) -> str:
     """A base64 asset blob with no `data:...;base64,` URI prefix.
 
-    Realistically mixed: about half the time there is *some* nearby comment
-    naming the asset kind (still no literal "base64" or data-URI prefix);
-    the rest have no cue at all. The no-cue half is the genuinely hard case
-    fix round 1 calls out -- an unlabeled high-entropy blob is structurally
-    indistinguishable from a bare secret without file/content-type context
-    this text-only redactor does not have. Kept honest rather than
-    special-cased into passing.
+    A third of the time it is passed straight through JavaScript's `atob()`
+    (a real, extremely common adjacent convention for "this is base64" with
+    no literal word "base64" in sight); the rest have no cue of any kind --
+    the genuinely hard case D-026 exists for. Per D-026, this whole category
+    is an `opaque_blob` negative: over-redaction here is reported and
+    bounded (<=0.30), not required near-zero like text negatives, because no
+    text-only signal distinguishes a fully unlabeled high-entropy asset blob
+    from a real high-entropy secret -- both are drawn from the same
+    statistical distribution.
     """
     body = _rand_chars(rng, _B64, rng.randint(60, 140)) + "=="
-    if rng.random() < 0.5:
+    variant = rng.choice(("atob", "atob", "commented", "bare"))
+    if variant == "atob":
+        quote = rng.choice(['"', "'"])
+        return f"const decoded = atob({quote}{body}{quote});"
+    if variant == "commented":
         kind = rng.choice(["wasm module", "font glyph table", "icon atlas"])
         return f"// preloaded {kind} follows\nconst BLOB_{rng.randint(1, 99)} = '{body}';"
     return f"const DATA_{rng.randint(1, 99)} = '{body}';"
+
+
+def _neg_base64_sourcemap(rng: random.Random) -> str:
+    """An inline source map data URI (opaque_blob, D-026), per a bundler's
+    `//# sourceMappingURL=` comment. Real inline source maps are always
+    base64-encoded (an earlier draft of this generator also produced an
+    unrealistic `;charset=utf-8,` variant with a base64 body, which real
+    tooling never emits -- a `charset=utf-8` data URI is percent-encoded
+    text, not base64 -- fixed here rather than kept as an easy category)."""
+    body = _rand_chars(rng, _B64, rng.randint(80, 160)) + "=="
+    mime = rng.choice(["application/json", "application/json;charset=utf-8"])
+    return f"//# sourceMappingURL=data:{mime};base64,{body}"
+
+
+def _neg_base64_protobuf(rng: random.Random) -> str:
+    """A base64-encoded protobuf/gRPC-web payload (opaque_blob, D-026).
+
+    Half use the realistic `data:application/x-protobuf;base64,` data-URI
+    form (real, and adjacent to the same `base64,` cue as other assets);
+    half are a bare log-style field with no adjacent cue at all -- the
+    genuinely hard case, same as `base64-asset-bare`.
+    """
+    body = _rand_chars(rng, _B64, rng.randint(60, 140)) + "=="
+    if rng.random() < 0.7:
+        return f"payload: data:application/x-protobuf;base64,{body}"
+    return f"const RESPONSE_BYTES = '{body}';"
+
+
+# Categories whose over-redaction is reported and bounded separately
+# (D-026) rather than folded into the text false-positive rate. Set from
+# the category, never from whether the redactor happens to fire on a given
+# row -- see gen_corpus.py's `_make_negative`.
+OPAQUE_BLOB_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "base64-asset-labeled",
+        "base64-asset-bare",
+        "base64-sourcemap",
+        "base64-protobuf",
+    }
+)
 
 
 def _neg_python_traceback_address(rng: random.Random) -> str:
@@ -236,6 +282,99 @@ def _neg_hex_color(rng: random.Random) -> str:
     return f"--color-accent: #{color}; /* brand accent */"
 
 
+_SSH_KEY_TYPES = (
+    ("ssh-rsa", "AAAAB3NzaC1yc2EAAAADAQABAAABgQ"),
+    ("ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAI"),
+    ("ssh-dss", "AAAAB3NzaC1kc3MAAACBAP"),
+    ("ecdsa-sha2-nistp256", "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABB"),
+    ("ecdsa-sha2-nistp384", "AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABh"),
+    ("ecdsa-sha2-nistp521", "AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEAAAAIbmlzdHA1MjEAAACF"),
+    ("sk-ssh-ed25519@openssh.com", "AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAI"),
+)
+
+
+def _neg_ssh_public_key(rng: random.Random) -> str:
+    key_type, prefix = rng.choice(_SSH_KEY_TYPES)
+    body = prefix + _rand_chars(rng, _B64, rng.randint(40, 90))
+    user = rng.choice(["deploy", "ci", "runner"])
+    host = rng.choice(["build-01", "laptop", "workstation"])
+    return f"{key_type} {body} {user}@{host}"
+
+
+def _neg_known_hosts_line(rng: random.Random) -> str:
+    key_type, prefix = rng.choice(_SSH_KEY_TYPES)
+    body = prefix + _rand_chars(rng, _B64, rng.randint(40, 90))
+    host = rng.choice(["github.com", "gitlab.com", "bitbucket.org"])
+    if rng.random() < 0.5:
+        salt = _rand_chars(rng, _B64, 20)
+        digest = _rand_chars(rng, _B64, 27)
+        return f"|1|{salt}=|{digest}= {key_type} {body}"
+    return f"{host} {key_type} {body}"
+
+
+def _neg_authorized_keys_line(rng: random.Random) -> str:
+    key_type, prefix = rng.choice(_SSH_KEY_TYPES)
+    body = prefix + _rand_chars(rng, _B64, rng.randint(40, 90))
+    comment = rng.choice(["deploy@ci", "backup-key", "jenkins"])
+    if rng.random() < 0.5:
+        return f'command="/usr/local/bin/deploy.sh" {key_type} {body} {comment}'
+    return f"{key_type} {body} {comment}"
+
+
+def _neg_pem_public_key(rng: random.Random) -> str:
+    lines = ["-----BEGIN PUBLIC KEY-----"]
+    for _ in range(6):
+        lines.append(_rand_chars(rng, _B64, 64))
+    lines.append("-----END PUBLIC KEY-----")
+    return "\n".join(lines)
+
+
+def _neg_pem_certificate(rng: random.Random) -> str:
+    lines = ["-----BEGIN CERTIFICATE-----"]
+    for _ in range(14):
+        lines.append(_rand_chars(rng, _B64, 64))
+    lines.append("-----END CERTIFICATE-----")
+    return "\n".join(lines)
+
+
+_PROSE_CREDENTIAL_SENTENCES = (
+    "Please enter your password when prompted by the login screen.",
+    "The API key must be included in the Authorization header of every request.",
+    "This document explains how bearer tokens are validated by the gateway.",
+    "Rotate the secret before the certificate expires to avoid downtime.",
+    "A credential is any piece of information used to authenticate a user.",
+    "The password field should never be logged in plaintext.",
+    "Tokens issued by the auth server expire after one hour.",
+    "Store the API key in an environment variable, not in source control.",
+    "The bearer scheme is defined in RFC 6750.",
+    "A weak password is one of the most common security vulnerabilities.",
+    "This guide covers how to generate a new access token from the dashboard.",
+    "Credential stuffing attacks reuse leaked username and password pairs.",
+    "The service account key file is mounted as a read-only volume.",
+    "Users must reset their password every ninety days per policy.",
+    "The token endpoint accepts a refresh token and returns a new access token.",
+    "Never share your secret key with anyone, including support staff.",
+    "The bearer token grants temporary access to the requested resource.",
+    "A strong password combines letters, numbers, and symbols.",
+    "This function validates the API key format before making a request.",
+    "Credential rotation is scheduled to run nightly at midnight.",
+    "The login form asks for a username and a password.",
+    "Secret management tools help teams avoid hardcoding credentials.",
+    "The key exchange protocol negotiates a shared secret between peers.",
+    "Password managers can generate and store strong, unique passwords.",
+    "An API key identifies the calling application, not the end user.",
+    "The token is opaque and should not be parsed by the client.",
+    "A hint about the password prompt appears after three failed attempts.",
+    "The word password is easy to guess, so please avoid it.",
+    "This page is password protected and requires a valid session.",
+    "Enter your credential whenever the system requests one.",
+)
+
+
+def _neg_prose_credential_vocab(rng: random.Random) -> str:
+    return " ".join(rng.sample(_PROSE_CREDENTIAL_SENTENCES, k=rng.randint(2, 3)))
+
+
 def _neg_prose(rng: random.Random) -> str:
     sentences = [
         "The build completed without warnings.",
@@ -262,6 +401,8 @@ NEGATIVE_CATEGORIES: dict[str, Callable[[random.Random], str]] = {
     "etag": _neg_etag,
     "base64-asset-labeled": _neg_base64_asset_labeled,
     "base64-asset-bare": _neg_base64_asset_bare,
+    "base64-sourcemap": _neg_base64_sourcemap,
+    "base64-protobuf": _neg_base64_protobuf,
     "python-traceback-address": _neg_python_traceback_address,
     "long-java-identifier": _neg_long_java_identifier,
     "minified-js": _neg_minified_js,
@@ -271,4 +412,17 @@ NEGATIVE_CATEGORIES: dict[str, Callable[[random.Random], str]] = {
     "file-path": _neg_file_path,
     "hex-color": _neg_hex_color,
     "prose": _neg_prose,
+    "prose-credential-vocab": _neg_prose_credential_vocab,
+    "ssh-public-key": _neg_ssh_public_key,
+    "known-hosts-line": _neg_known_hosts_line,
+    "authorized-keys-line": _neg_authorized_keys_line,
+    "pem-public-key": _neg_pem_public_key,
+    "pem-certificate": _neg_pem_certificate,
+}
+
+# Per-category negative-row-count overrides (default set by the caller).
+# The prose-with-credential-vocabulary category needs >=24 varied rows
+# (fix round 2, item 3) to be a meaningful 0-FP bar on its own.
+NEGATIVE_COUNT_OVERRIDES: dict[str, int] = {
+    "prose-credential-vocab": 24,
 }

@@ -1,32 +1,23 @@
-"""Structural false-positive filters for the local rules (fix round 1, item 2).
+"""Structural false-positive/false-negative filters for the local rules.
 
-The first cut of `local-high-entropy` excluded lockfile hashes and base64
-image data with lookbehinds that required an exact literal prefix
-(`sha256-`, `base64,`, ...) immediately before the match. A held-out probe
-set with different hash/lockfile formats (Go `go.sum`, Cargo.lock, pip
-`--hash=sha256:`, docker digests, ...) showed those lookbehinds were
-overfit to this repo's own negative-corpus generators rather than a real
-defense. This module replaces them with structural checks that do not
-enumerate specific negative shapes:
+Fix round 1 replaced literal sha*/base64-prefix lookbehinds (overfit to this
+repo's own negative-corpus generators) with structural checks: standard
+hex-digest lengths, required mixed character classes, dictionary-word-like
+values, obvious placeholders, and a "nearby hash/asset vocabulary word"
+search.
 
-- standard hex-digest lengths (md5/sha1/sha256/sha384/sha512/etc.) are never
-  high-entropy secrets regardless of context;
-- a real secret's high-entropy run almost always mixes multiple character
-  classes (a pure-hex or pure-lowercase run is far more likely to be a hash
-  or a slug than a generated credential);
-- values built from 2+ dictionary-like words joined by `-`/`_` (a secret's
-  *name*, e.g. `prod-db-credentials`, or a resource slug) are not secret
-  *values*;
-- obvious placeholders (`changeme`, `<token>`, `${VAR}`, `xxxxxxxx`, ...)
-  from `.env.example`-style files are not secrets;
-- a nearby (within ~40 chars before the match) hash/digest/asset vocabulary
-  word (`sha256`, `integrity`, `checksum`, `base64`, `wasm`, ...) means the
-  value is conventionally being announced as a hash or an embedded asset,
-  not a credential.
-
-None of these depend on the exact literal formatting of any specific
-negative-corpus generator, so a differently-formatted held-out probe should
-be caught the same way a locally-generated one is.
+Fix round 2 found that last check itself was a false-negative risk: it
+searched an entire 72-char lookback for a vocabulary word ANYWHERE, so a
+sentence like "sha256 verified. rotated value <secret>" suppressed a real
+secret because "sha256" appeared earlier on the line, nowhere near the
+candidate. `has_nearby_hash_or_asset_context` is now adjacency-only: the
+candidate must be IMMEDIATELY preceded (no free text in between) by one of
+a fixed set of real cue strings (`sha256-`, `h1:`, `base64,`, `etag: "`,
+...). The same round adds SSH-public-key and PEM public-key/certificate
+exclusions (`is_ssh_public_key_context`, `is_inside_excluded_pem_block`),
+and a "plain English word" check for `local-password-assignment` (a
+lowercase dictionary word after "password" is never a hit, regardless of
+which separator matched it).
 """
 
 from __future__ import annotations
@@ -60,10 +51,52 @@ _PLACEHOLDER_EXACT = frozenset(
     }
 )
 
-_HASH_ASSET_CONTEXT_RE = re.compile(
-    r"(?i)\b(?:sha1|sha256|sha384|sha512|sha3|md5|blake2b?|h1|h2|integrity|"
-    r"checksum|digest|hash|base64|wasm|font|woff2?|icon|glyph|atlas)\b"
+# Adjacency-only hash/digest/asset cues (fix round 2, item 2): the candidate
+# must be an EXACT suffix match against one of these immediately before its
+# start, with no free text in between. Each is a real, specific convention
+# ("sha512-<base64>" lockfile hashes, "h1:<base64>" go.sum lines,
+# "base64,<blob>" data URIs, "etag: "<hex>"" response headers, "@sha256:
+# <hex>" docker digests) rather than a word that might appear anywhere on
+# the same line.
+_ADJACENT_HASH_ASSET_CUES: tuple[str, ...] = (
+    "sha1-",
+    "sha256-",
+    "sha384-",
+    "sha512-",
+    "sha1:",
+    "sha256:",
+    "sha384:",
+    "sha512:",
+    "--hash=sha256:",
+    "integrity sha512-",
+    "h1:",
+    "base64,",
+    "base64:",
+    'etag: "',
+    'etag:"',
+    "@sha256:",
+    'atob("',
+    "atob('",
 )
+
+# SSH public-key type markers (fix round 2, item 4): the base64 body that
+# follows one of these (in a standalone public key file, `known_hosts`, or
+# `authorized_keys`) is a public key, never a secret. Private key PEM
+# blocks are handled separately (`is_inside_excluded_pem_block`) and by the
+# vendored `private-key` rule, which is untouched by this exclusion.
+_SSH_PUBLIC_KEY_MARKERS: tuple[str, ...] = (
+    "ssh-rsa ",
+    "ssh-ed25519 ",
+    "ssh-dss ",
+    "ecdsa-sha2-nistp256 ",
+    "ecdsa-sha2-nistp384 ",
+    "ecdsa-sha2-nistp521 ",
+    "sk-ssh-ed25519@openssh.com ",
+)
+
+_PEM_BEGIN_RE = re.compile(r"-----BEGIN ([A-Z0-9 ]+?)-----")
+_PEM_END_RE = re.compile(r"-----END ([A-Z0-9 ]+?)-----")
+_EXCLUDED_PEM_TYPES = frozenset({"PUBLIC KEY", "CERTIFICATE"})
 
 _ENTROPY_RULE_IDS = frozenset({"local-high-entropy-alnum", "local-high-entropy-b64"})
 # generic-api-key is gitleaks' own "keyword + separator + freeform value"
@@ -77,6 +110,7 @@ _ENTROPY_RULE_IDS = frozenset({"local-high-entropy-alnum", "local-high-entropy-b
 _ASSIGNMENT_RULE_IDS = frozenset(
     {"local-env-secret", "local-password-assignment", "generic-api-key"}
 )
+_PASSWORD_RULE_IDS = frozenset({"local-password-assignment"})
 
 
 def is_standard_hex_digest(value: str) -> bool:
@@ -119,12 +153,52 @@ def looks_like_placeholder(value: str) -> bool:
     return len(stripped) >= 4 and set(stripped.lower()) <= {"x"}
 
 
+def looks_like_plain_english_word(value: str) -> bool:
+    """True for a single all-lowercase alphabetic token (fix round 2, item 3):
+    "whenever", "prompt", "protected" are never a password value regardless
+    of which separator matched them."""
+    return value.isalpha() and value.islower()
+
+
 def has_nearby_hash_or_asset_context(preceding_text: str) -> bool:
-    return _HASH_ASSET_CONTEXT_RE.search(preceding_text) is not None
+    """Adjacency-only (fix round 2, item 2): true only when `preceding_text`
+    ENDS with one of the fixed cue strings, i.e. the cue is immediately
+    before the candidate with no free text in between."""
+    lowered = preceding_text.lower()
+    return any(lowered.endswith(cue) for cue in _ADJACENT_HASH_ASSET_CUES)
 
 
-def passes_local_filters(rule_id: str, secret: str, preceding_text: str) -> bool:
-    """Dispatch to the filter set for `rule_id`; vendored rules are untouched."""
+def is_ssh_public_key_context(preceding_text: str) -> bool:
+    return any(preceding_text.endswith(marker) for marker in _SSH_PUBLIC_KEY_MARKERS)
+
+
+def is_inside_excluded_pem_block(context_before: str) -> bool:
+    """True when `context_before` (text before the candidate, bounded to a
+    few KB by the caller) ends inside an open `-----BEGIN PUBLIC KEY-----`
+    or `-----BEGIN CERTIFICATE-----` block, i.e. the nearest preceding BEGIN
+    marker has no matching END marker before the candidate. Private-key
+    blocks are not in `_EXCLUDED_PEM_TYPES`: they must still be redacted
+    (by the vendored `private-key` rule, untouched here)."""
+    last_begin = None
+    for match in _PEM_BEGIN_RE.finditer(context_before):
+        last_begin = match
+    if last_begin is None:
+        return False
+    tail = context_before[last_begin.end() :]
+    if _PEM_END_RE.search(tail):
+        return False  # that block already closed before the candidate
+    return last_begin.group(1).strip() in _EXCLUDED_PEM_TYPES
+
+
+def passes_local_filters(
+    rule_id: str, secret: str, preceding_text: str, pem_context: str = ""
+) -> bool:
+    """Dispatch to the filter set for `rule_id`; vendored rules are untouched.
+
+    `preceding_text` is a short (tens of chars) lookback for adjacency
+    checks; `pem_context` is a much larger lookback (a few KB) used only to
+    detect an open PEM public-key/certificate block.
+    """
     if rule_id in _ENTROPY_RULE_IDS:
         if is_standard_hex_digest(secret):
             return False
@@ -134,7 +208,17 @@ def passes_local_filters(rule_id: str, secret: str, preceding_text: str) -> bool
             return False
         if looks_like_placeholder(secret):
             return False
-        return not has_nearby_hash_or_asset_context(preceding_text)
+        if has_nearby_hash_or_asset_context(preceding_text):
+            return False
+        if is_ssh_public_key_context(preceding_text):
+            return False
+        return not is_inside_excluded_pem_block(pem_context)
+    if rule_id in _PASSWORD_RULE_IDS:
+        if looks_like_plain_english_word(secret):
+            return False
+        if looks_like_placeholder(secret):
+            return False
+        return not looks_like_dictionary_words(secret)
     if rule_id in _ASSIGNMENT_RULE_IDS:
         if looks_like_placeholder(secret):
             return False

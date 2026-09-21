@@ -49,7 +49,15 @@ _ALLOWLIST_CACHE: list[re.Pattern[str]] | None = None
 
 _WINDOW_SIZE = 64 * 1024
 _WINDOW_OVERLAP = 8192
-_CONTEXT_LOOKBACK = 72
+# Short lookback for adjacency-only cue checks (fix round 2, item 2): must
+# only be as long as the longest fixed cue string ("sk-ssh-ed25519@openssh
+# .com " is 28 chars), never large enough to see a cue word elsewhere on
+# the line -- that was the false-negative bug this round fixes.
+_CONTEXT_LOOKBACK = 32
+# Much larger lookback used only to find an enclosing PEM
+# public-key/certificate block header (fix round 2, item 4): those blocks
+# can be a few KB.
+_PEM_LOOKBACK = 4096
 _REDACTED_MARKER_PREFIX = "[REDACTED:"
 _MARKER_TEMPLATE = _REDACTED_MARKER_PREFIX + "{}]"
 _FAILURE_MARKER = "[redaction failed]"
@@ -113,12 +121,13 @@ def _candidate_hit(
     if _is_allowlisted(secret):
         return False
     preceding = window[max(0, start - _CONTEXT_LOOKBACK) : start]
-    return _redact_filters.passes_local_filters(rule_id, secret, preceding)
+    pem_context = window[max(0, start - _PEM_LOOKBACK) : start]
+    return _redact_filters.passes_local_filters(rule_id, secret, preceding, pem_context)
 
 
 def _rule_hits(window: str, lowered_window: str) -> list[tuple[int, int, str]]:
     hits: list[tuple[int, int, str]] = []
-    for rule_id, pattern, keywords, entropy_floor, _group in _redact_rules.RULES:
+    for rule_id, pattern, keywords, entropy_floor in _redact_rules.RULES:
         if keywords and not any(keyword in lowered_window for keyword in keywords):
             continue
         try:

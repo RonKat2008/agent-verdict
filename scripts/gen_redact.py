@@ -63,33 +63,48 @@ _POSIX_CLASSES = {
     "[:punct:]": "!-/:-@\\[-`{-~",
 }
 
-# Local rules not present in gitleaks (task-2-brief.md, fix-round-1 items
-# 1/2/6/7). Each tuple entry mirrors the RULES shape below (id, pattern,
-# keywords, entropy, group). Fix round 1 removed the sha*/base64-prefix
-# lookbehinds that used to guard `local-high-entropy` -- they exactly
-# mirrored this repo's own negative-corpus generators (a held-out probe set
-# with different lockfile/hash formats proved them worthless) -- and
-# replaced them with structural checks applied at match time in redact.py
-# (`_passes_local_filters`): standard hex-digest lengths, required mixed
-# character classes, dictionary-word-like values, obvious placeholders, and
-# a nearby hash/digest/asset vocabulary check. `local-high-entropy` is split
-# into an alnum-only and a base64-with-padding variant so each can carry its
-# own (independently raised) entropy floor.
-LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None, int], ...] = (
+# Local rules not present in gitleaks. Each tuple entry mirrors the RULES
+# shape below: (id, pattern, keywords, entropy_floor). Fix round 1 removed
+# the sha*/base64-prefix lookbehinds that used to guard `local-high-entropy`
+# -- they exactly mirrored this repo's own negative-corpus generators (a
+# held-out probe set with different lockfile/hash formats proved them
+# worthless) -- and replaced them with structural checks applied at match
+# time in redact.py/_redact_filters.py: standard hex-digest lengths,
+# required mixed character classes, dictionary-word-like values, obvious
+# placeholders, an ADJACENCY-ONLY hash/digest/asset cue check (fix round 2,
+# item 2 -- an earlier version searched an entire lookback window for a cue
+# word anywhere, which suppressed real secrets merely mentioned near a hash
+# word elsewhere on the line), and SSH-public-key / PEM public-key /
+# certificate exclusions (fix round 2, item 4). `local-high-entropy` is
+# split into an alnum-only and a base64-with-padding variant so each can
+# carry its own (independently raised) entropy floor.
+LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None], ...] = (
     (
         "local-env-secret",
         r"(?m)^\s*(?:export\s+)?[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)"
         r"[A-Z0-9_]*\s*=\s*(\S{8,})",
         ("key", "token", "secret", "password", "passwd", "credential"),
         None,
-        1,
     ),
     (
         "local-password-assignment",
-        r"(?im)\bpassword\b\s*[:=]?\s+(\S{6,})",
+        # Fix round 2, item 3: "a hint about the password prompt." and
+        # "password whenever"/"password protected" (ordinary English, no
+        # assignment) must not hit. Three alternatives, each with its own
+        # capturing group (redact.py unions whichever one participates):
+        # (1) an explicit `:`/`=` separator is REQUIRED (not optional
+        #     whitespace, as the first cut had it);
+        # (2) a `.netrc`-style bare `password <value>` line, but only when
+        #     the same line also mentions "machine" or "login";
+        # (3) a line that is JUST "password <value>", where <value>
+        #     contains a digit or symbol (excludes "password protected").
+        # `_redact_filters.looks_like_plain_english_word` additionally
+        # rejects a lowercase-alphabetic-only value from ANY branch.
+        r"(?im)\bpassword\s*[:=]\s*(\S{6,})"
+        r"|^(?=.*\b(?:machine|login)\b).*?\bpassword\s+(\S{6,})"
+        r"|^\s*password\s+(\S*[0-9\W]\S*)\s*$",
         ("password",),
         None,
-        1,
     ),
     (
         "local-high-entropy-alnum",
@@ -102,7 +117,6 @@ LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None, int], ...] = (
         r"(?<![A-Za-z0-9+/])([A-Za-z0-9]{40,})(?![A-Za-z0-9+/])",
         (),
         4.3,
-        1,
     ),
     (
         "local-high-entropy-b64",
@@ -114,37 +128,71 @@ LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None, int], ...] = (
         r"(?<![A-Za-z0-9+/])([A-Za-z0-9+/]{40,}={1,2})",
         (),
         4.8,
-        1,
     ),
     (
         "local-url-credential",
         r"\b[a-z][a-z0-9+.-]*://[^/\s:@]+:([^/\s@]+)@",
         ("://",),
         None,
-        1,
     ),
     (
         "local-openrouter",
         r"\bsk-or-v1-[a-f0-9]{64}\b",
         ("sk-or-v1-",),
         None,
-        0,
     ),
     (
         "local-openai-project-key",
         r"\bsk-proj-[A-Za-z0-9_-]{20,200}\b",
         ("sk-proj-",),
         None,
-        0,
     ),
     (
         "local-twilio-account-sid",
+        # Fix round 2, item 6: the keyword prefilter used to be the 2-letter
+        # substring "ac", which matches "cache", "backup", "package", ... on
+        # essentially every line of real tool output, making the prefilter
+        # pointless. The regex's own anchors (`AC` + exactly 32 hex chars,
+        # word boundaries) are precise enough on their own; run
+        # unconditionally instead of gating on a near-universal substring.
         r"\bAC[0-9a-fA-F]{32}\b",
-        ("ac",),
+        (),
         None,
-        0,
+    ),
+    (
+        "local-huggingface-token",
+        # Fix round 2, item 6: the vendored huggingface-access-token rule
+        # requires exactly 34 chars after "hf_"; widen local coverage to
+        # 30-40 to catch token-format variants.
+        r"\bhf_[A-Za-z0-9]{30,40}\b",
+        ("hf_",),
+        None,
+    ),
+    (
+        "local-telegram-bot-token",
+        # Fix round 2, item 5: `https://api.telegram.org/bot<id>:<secret>/...`
+        # is missed by the vendored telegram rule, which requires a narrow
+        # gap after its keyword. `(?<=/bot)` is a fixed-width (4-char)
+        # lookbehind, valid in Python.
+        r"(?<=/bot)\d{6,12}:[A-Za-z0-9_-]{35}\b",
+        ("telegram.org/bot",),
+        None,
     ),
 )
+
+# Fix round 2, item 5: only kept if it does not raise text FPR -- see
+# task-2-report.md "Fix round 2" for the measured outcome. Declared
+# separately so it can be omitted from LOCAL_RULES with a one-line change
+# and a clear reason, rather than silently dropped.
+MAILGUN_RULE: tuple[str, str, tuple[str, ...], float | None] = (
+    "local-mailgun-key",
+    r"\bkey-[0-9a-f]{32}\b",
+    ("key-",),
+    None,
+)
+INCLUDE_MAILGUN_RULE = True
+if INCLUDE_MAILGUN_RULE:
+    LOCAL_RULES = (*LOCAL_RULES, MAILGUN_RULE)
 
 
 def _expand_posix_classes(pattern: str) -> str:
@@ -216,36 +264,6 @@ def translate_regex(pattern: str) -> str:
     return pattern
 
 
-def _has_capturing_group(pattern: str) -> bool:
-    """True if `pattern` contains at least one capturing group (named or not).
-
-    Used to pick `secret_group`: 1 when the pattern captures a sub-span
-    (almost always the secret itself in vendored rules), else 0 (whole match).
-    """
-    i, n, in_class = 0, len(pattern), False
-    while i < n:
-        c = pattern[i]
-        if c == "\\":
-            i += 2
-            continue
-        if in_class:
-            in_class = c != "]"
-            i += 1
-            continue
-        if c == "[":
-            in_class = True
-            i += 1
-            continue
-        if c == "(":
-            nxt = pattern[i + 1 : i + 2]
-            if nxt != "?":
-                return True
-            if pattern[i + 2 : i + 4] == "P<":
-                return True
-        i += 1
-    return False
-
-
 def _compile_check(patterns: list[str]) -> list[dict[str, Any]]:
     """Compile-check every pattern under Python 3.9 `re` semantics.
 
@@ -294,14 +312,14 @@ def _load_vendored_rules() -> tuple[list[dict[str, Any]], list[str], list[str]]:
 
 
 def build_rules() -> tuple[
-    list[tuple[str, str, tuple[str, ...], float | None, int]],
+    list[tuple[str, str, tuple[str, ...], float | None]],
     list[tuple[str, str]],
     list[str],
     list[str],
 ]:
     """Returns (compiled RULES entries, skipped (id, reason) pairs, allow regexes, stopwords)."""
     vendored, allow_regexes, stopwords = _load_vendored_rules()
-    candidates: list[tuple[str, str, tuple[str, ...], float | None, int]] = []
+    candidates: list[tuple[str, str, tuple[str, ...], float | None]] = []
     path_only: list[tuple[str, str]] = []
     for rule in vendored:
         rule_id = rule["id"]
@@ -312,13 +330,12 @@ def build_rules() -> tuple[
         keywords = tuple(sorted(str(k).lower() for k in rule.get("keywords", ())))
         entropy = rule.get("entropy")
         entropy_floor = float(entropy) if entropy is not None else None
-        secret_group = 1 if _has_capturing_group(translated) else 0
-        candidates.append((rule_id, translated, keywords, entropy_floor, secret_group))
+        candidates.append((rule_id, translated, keywords, entropy_floor))
     candidates.extend(LOCAL_RULES)
     allow_regexes = [translate_regex(r) for r in allow_regexes]
 
     check_results = _compile_check([c[1] for c in candidates])
-    compiled: list[tuple[str, str, tuple[str, ...], float | None, int]] = []
+    compiled: list[tuple[str, str, tuple[str, ...], float | None]] = []
     skipped: list[tuple[str, str]] = []
     for entry, result in zip(candidates, check_results, strict=True):
         if result["ok"]:
@@ -339,16 +356,16 @@ def build_rules() -> tuple[
 
 
 def _format_rules_literal(
-    rules: list[tuple[str, str, tuple[str, ...], float | None, int]],
+    rules: list[tuple[str, str, tuple[str, ...], float | None]],
 ) -> str:
     lines = []
-    for rule_id, pattern, keywords, entropy, group in sorted(rules, key=lambda r: r[0]):
-        lines.append(f"    ({rule_id!r}, {pattern!r}, {keywords!r}, {entropy!r}, {group!r}),")
+    for rule_id, pattern, keywords, entropy in sorted(rules, key=lambda r: r[0]):
+        lines.append(f"    ({rule_id!r}, {pattern!r}, {keywords!r}, {entropy!r}),")
     return "\n".join(lines)
 
 
 def write_rules_file(
-    rules: list[tuple[str, str, tuple[str, ...], float | None, int]],
+    rules: list[tuple[str, str, tuple[str, ...], float | None]],
     allow_regexes: list[str],
     stopwords: list[str],
     gitleaks_commit: str,
@@ -359,8 +376,8 @@ def write_rules_file(
     content = f'''"""GENERATED by `python3 scripts/gen_redact.py`. Do not edit by hand.
 
 Source: vendor/gitleaks.toml (MIT license, see vendor/GITLEAKS_LICENSE) at
-gitleaks commit {gitleaks_commit}, plus three local rules (task-2-brief.md).
-Edit scripts/gen_redact.py or vendor/gitleaks.toml and run
+gitleaks commit {gitleaks_commit}, plus local rules (task-2-brief.md, fix
+rounds 1-2). Edit scripts/gen_redact.py or vendor/gitleaks.toml and run
 `make gen-redact` to regenerate. Patterns are stored as strings, not
 compiled -- see verdict_hot/redact.py for lazy per-rule compilation.
 """
@@ -369,8 +386,12 @@ from __future__ import annotations
 
 GITLEAKS_COMMIT = {gitleaks_commit!r}
 
-# (rule_id, pattern, lowercase_keywords, entropy_floor_or_None, secret_group)
-RULES: tuple[tuple[str, str, tuple[str, ...], "float | None", int], ...] = (
+# (rule_id, pattern, lowercase_keywords, entropy_floor_or_None). A match's
+# secret is the union of every participating capturing group, or the whole
+# match if none participated (verdict_hot/redact.py:_match_spans) -- fix
+# round 2 removed the unused `secret_group` index this tuple used to carry,
+# since group selection has been dynamic (per-match) since fix round 1.
+RULES: tuple[tuple[str, str, tuple[str, ...], "float | None"], ...] = (
 {body}
 )
 
