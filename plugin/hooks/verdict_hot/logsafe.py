@@ -69,14 +69,39 @@ def scrub(text: str) -> str:
 
 
 def _scrub_value(value: object) -> object:
-    """Recursively scrub string leaves. Returns new objects; never mutates."""
+    """Recursively scrub string leaves *and* dict keys. Returns new objects,
+    never mutates the input (dicts/lists are rebuilt, not edited in place).
+    """
     if isinstance(value, str):
         return scrub(value)
     if isinstance(value, dict):
-        return {key: _scrub_value(val) for key, val in value.items()}
+        return _scrub_dict(value)
     if isinstance(value, (list, tuple)):
         return [_scrub_value(item) for item in value]
     return value
+
+
+def _scrub_dict(value: dict[object, object]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, val in value.items():
+        scrubbed_key = _dedupe_key(result, scrub(str(key)))
+        result[scrubbed_key] = _scrub_value(val)
+    return result
+
+
+def _dedupe_key(existing: dict[str, object], key: str) -> str:
+    """Two distinct original keys can scrub to the same string (for example
+    two different secret values that each collapse to "<redacted>"). Keep
+    both rather than letting the second overwrite the first.
+    """
+    if key not in existing:
+        return key
+    suffix = 2
+    candidate = f"{key}#{suffix}"
+    while candidate in existing:
+        suffix += 1
+        candidate = f"{key}#{suffix}"
+    return candidate
 
 
 def _max_log_bytes() -> int:

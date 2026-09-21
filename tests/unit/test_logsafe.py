@@ -163,15 +163,85 @@ def test_log_invocation_scrubs_nested_dicts_and_lists_in_extra(
     assert row["nested"]["headers"] == ["Authorization: <redacted>"]
 
 
+def test_log_invocation_scrubs_a_top_level_secret_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERDICT_HOME", str(tmp_path))
+    secret = "topsecretvalue12"
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_API_KEY", secret)
+
+    logsafe.log_invocation("post", "s1", "ok", 1.0, extra={secret: "some value"})
+
+    lines = _split_on_literal_newline(paths.hook_log().read_text(encoding="utf-8"))
+    assert len(lines) == 1
+    row = json.loads(lines[0])  # must not raise: the line must stay valid JSON
+    assert secret not in json.dumps(row)
+    assert row["<redacted>"] == "some value"
+
+
+def test_log_invocation_scrubs_a_nested_secret_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERDICT_HOME", str(tmp_path))
+    secret = "nestedsecret123"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
+
+    logsafe.log_invocation("post", "s1", "ok", 1.0, extra={"outer": {secret: "value"}})
+
+    lines = _split_on_literal_newline(paths.hook_log().read_text(encoding="utf-8"))
+    row = json.loads(lines[0])
+    assert secret not in json.dumps(row)
+    assert row["outer"] == {"<redacted>": "value"}
+
+
+def test_log_invocation_dedupes_keys_that_collide_after_scrubbing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERDICT_HOME", str(tmp_path))
+    secret_one = "secretvalueone12"
+    secret_two = "secretvaluetwo34"
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_A", secret_one)
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_B", secret_two)
+
+    logsafe.log_invocation(
+        "post", "s1", "ok", 1.0, extra={secret_one: "first", secret_two: "second"}
+    )
+
+    lines = _split_on_literal_newline(paths.hook_log().read_text(encoding="utf-8"))
+    row = json.loads(lines[0])  # must not raise: colliding keys must not overwrite each other
+    assert secret_one not in json.dumps(row)
+    assert secret_two not in json.dumps(row)
+    assert row["<redacted>"] == "first"
+    assert row["<redacted>#2"] == "second"
+
+
+def test_scrub_value_scrubs_keys_and_does_not_mutate_the_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_API_KEY", "originalsecret12")
+    original: dict[str, object] = {
+        "originalsecret12": "value",
+        "nested": {"a": "b"},
+    }
+
+    result = logsafe._scrub_value(original)
+
+    assert original == {"originalsecret12": "value", "nested": {"a": "b"}}  # not mutated
+    assert isinstance(result, dict)
+    assert "originalsecret12" not in result
+    assert result["<redacted>"] == "value"
+    assert result["nested"] == {"a": "b"}
+
+
 @settings(
     max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture], deadline=None
 )
-@given(text=st.text())
-def test_log_invocation_arbitrary_extra_text_keeps_every_hook_log_line_valid_json(
-    text: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@given(key=st.text(), value=st.text())
+def test_log_invocation_arbitrary_extra_key_and_text_keeps_every_hook_log_line_valid_json(
+    key: str, value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("VERDICT_HOME", str(tmp_path))
-    logsafe.log_invocation("post", "s1", "ok", 1.0, extra={"note": text})
+    logsafe.log_invocation("post", "s1", "ok", 1.0, extra={key: value})
     content = paths.hook_log().read_text(encoding="utf-8")
     for line in _split_on_literal_newline(content):
         json.loads(line)  # must not raise for any prior or current example
