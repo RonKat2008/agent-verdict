@@ -1,0 +1,395 @@
+{
+ "dryrun": {
+  "summary": "Mentally executed M0 and M1 of the VERDICT plan against CLAUDE.md, PLAN.md, VERIFIED_FACTS.md, and DECISIONS.md. Found 15 concrete blockers/ambiguities that would force guessing during implementation, ranked most consequential first. The most severe are a real contradiction between the \"network-free\" v0.1 collector definition and the SessionStart hook's mandatory reachability probe, and an undefined VERDICT_HOME env var that all ledger path resolution depends on. Several M1 tasks (verdict stats claim counts, the Stop row schema, PreToolUse/SubagentStop registration) reference components explicitly scheduled for M2, creating milestone-content contradictions. No modifications were made to the project; this is a read-only analysis.",
+  "issues": [
+   {
+    "id": "I1",
+    "severity": "critical",
+    "file": "docs/PLAN.md",
+    "location": "one optional reachability probe, cached 24 h",
+    "issue": "Section 4.2's SessionStart hook spec requires a network reachability probe on every session, but section 1 defines the v0.1 collector milestone (which M1 implements SessionStart for) as 'Key-free, network-free plugin that records the ledger.' M1 has no provider config yet (no key exists per E4), so it's undefined whether the SessionStart recorder built in M1 performs this probe, skips it, or errors.",
+    "evidence": "PLAN.md:44 'v0.1 collector | Key-free, network-free plugin that records the ledger...' vs PLAN.md:136 '| SessionStart | `startup|resume|clear|fork` | 5 | 1.5 s | one optional reachability probe, cached 24 h |'; M1 task list at PLAN.md:339 includes building the session_start recorder with no mention of the probe or its conditions.",
+    "fix": "Add to PLAN.md section 4.2 SessionStart row: 'The reachability probe only runs when a provider key is present (`CLAUDE_PLUGIN_OPTION_API_KEY` or the provider env var set); in v0.1 (M1, key-free by definition) the probe is skipped entirely and the session_start row records `probe: \"skipped_no_key\"`. The probe activates automatically starting in M2 once a key can be configured.'"
+   },
+   {
+    "id": "I2",
+    "severity": "critical",
+    "file": "docs/PLAN.md",
+    "location": "VERDICT_HOME=$(mktemp -d) plugin/hooks/run.sh post-fail",
+    "issue": "VERDICT_HOME is used throughout the dev loop and gate commands (e.g. M1's 'run one hook by hand' recipe) to sandbox state, but no section defines what VERDICT_HOME actually overrides. Section 4.3 hardcodes all data paths as `~/.verdict/...` with no mention of an env var indirection, so ledger.py's path-resolution function cannot be written without guessing whether VERDICT_HOME replaces `~` entirely, replaces just the `.verdict` directory name, or something else.",
+    "evidence": "PLAN.md:313-314 'Run one hook by hand: `VERDICT_HOME=$(mktemp -d) plugin/hooks/run.sh post-fail < tests/fixtures/hooks/post_fail_bash.json; echo \"exit=$?\"`.' (same command repeated at CLAUDE.md:88) versus PLAN.md:151-153 'One file per session: `~/.verdict/events/<session_id>.jsonl`. Directory mode 0700, files 0600...' which never mentions VERDICT_HOME.",
+    "fix": "Add to PLAN.md section 4.2 or 4.3: 'All hot-path and CLI code resolves the Verdict data root through one function: `verdict_home() -> Path` returns `Path(os.environ[\"VERDICT_HOME\"])` if set, else `Path.home()`. Every documented `~/.verdict/...` path in this plan means `verdict_home() / \".verdict\" / ...`. No code may call `os.path.expanduser(\"~/.verdict\")` directly.'"
+   },
+   {
+    "id": "I3",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "stops with claims",
+    "issue": "M1's CLI spec requires `verdict stats` to report 'stops with claims', but claim extraction (`claims.py`) is explicitly scheduled for M2 (section 4.1, M2 task list). M1 cannot compute a 'stops with claims' count because no claims exist yet in the M1 ledger schema.",
+    "evidence": "PLAN.md:340 'CLI: `verdict stats` (sessions, stops, failures, stops with claims), `verdict doctor` (...)' under the M1 milestone, versus PLAN.md:354 listing `claims.py` under M2's task list.",
+    "fix": "Change PLAN.md:340 to 'CLI: `verdict stats` (sessions, stops, failures), `verdict doctor` (...)' and add to M2's task list (near line 354): 'Extend `verdict stats` to add a `stops with claims` column once `claims.py` exists.'"
+   },
+   {
+    "id": "I4",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "byte-identical",
+    "issue": "The CLI component is required to reuse `plugin/hooks/verdict_hot/` 'through a build step that copies [it] into the wheel, with a CI check that the trees are byte-identical,' but no mechanism is specified: not when the copy runs, not where the copy lands inside `src/agent_verdict/`, and not what the CI check command is. M1 needs this working immediately because M1's CLI (`stats`, `doctor`) must import the hot-path ledger code.",
+    "evidence": "PLAN.md:125 '| CLI and tools | `src/agent_verdict/` | Python 3.11+, stdlib core; extras `report` and `eval` | `stats`, `show`, `doctor`, ... Reuses the hot-path modules through a build step that copies `plugin/hooks/verdict_hot/` into the wheel, with a CI check that the trees are byte-identical.'",
+    "fix": "Add to PLAN.md section 4.1: 'The copy is performed by `scripts/sync_hot.py`, invoked by `make setup` and as a pre-build step in `pyproject.toml`, writing a verbatim copy (not a symlink) to `src/agent_verdict/verdict_hot/`. `make check` runs `diff -r plugin/hooks/verdict_hot src/agent_verdict/verdict_hot` and fails the build on any difference; this check is part of M1's `make check` gate (G1.1) since the M1 CLI already imports the copied tree.'"
+   },
+   {
+    "id": "I5",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "stop` (record only), `session_end",
+    "issue": "CLAUDE.md states the plugin registers all eight events (including PreToolUse and SubagentStop) as the architecture, but M1's task list only builds recorders for session_start, prompt, post, post_fail, stop, and session_end \u2014 `rules.py` (PreToolUse) and the SubagentStop handler are explicitly M2 work. It is undefined whether M1's `hooks.json` registers PreToolUse/SubagentStop at all, and if it does, what an unimplemented handler does when actually invoked in a live M1 session (crash vs. silent no-op vs. absent from hooks.json).",
+    "evidence": "CLAUDE.md:73 'Events registered: SessionStart, UserPromptSubmit, PreToolUse (^(Bash|Write|Edit|NotebookEdit)$), PostToolUse (mutate-or-egress tools), PostToolUseFailure (*), Stop, SubagentStop, SessionEnd.' versus PLAN.md:339 (M1 bullet, no PreToolUse/SubagentStop recorders) and PLAN.md:355 (`rules.py` PreToolUse listed under M2).",
+    "fix": "Add to PLAN.md's M1 bullet list (near line 339): 'M1's `plugin/hooks/hooks.json` registers only SessionStart, UserPromptSubmit, PostToolUse, PostToolUseFailure, Stop, and SessionEnd. PreToolUse and SubagentStop entries are added to `hooks.json` only in M2, alongside `rules.py` and the Stop verifier; until then Claude Code's normal permission flow and stop behavior apply unmodified.'"
+   },
+   {
+    "id": "I6",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "claims[]",
+    "issue": "Section 4.3's ledger schema unconditionally lists `claims[]`, `gate_reason`, `background_tasks_n`, and `arm` as fields on every `stop` row under `schema_v: 1`, but M1 only implements the Stop hook as 'record only' (before claims.py, gates.py, and the section-9.6 arm-assignment logic exist). It is unspecified which of these fields M1 actually writes, and whether adding them later constitutes a schema_v bump or an in-place addition \u2014 both of which conflict with the stated rule that 'only `verdict migrate` raises versions.'",
+    "evidence": "PLAN.md:164 '| `stop`, `subagent_stop` | `stop_hook_active`, `final_message_excerpt` (redacted, ...), `claims[]`, `gate_reason`, `background_tasks_n`, `arm` |' versus PLAN.md:339 M1 task 'stop (record only)' and PLAN.md section 9.6's `arm` computation being part of the M4-era causal-analysis design.",
+    "fix": "Add to PLAN.md section 4.3 (near line 164): 'In M1 (\"record only\"), the `stop` row contains only `stop_hook_active` and `final_message_excerpt`; `claims`, `gate_reason`, `background_tasks_n`, and `arm` are absent (not null) until M2/M4 backfill them under the same `schema_v: 1` \u2014 the TypedDict marks them `NotRequired`, so their addition is not a schema version bump.'"
+   },
+   {
+    "id": "I7",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "Common fields on every row",
+    "issue": "Section 4.3 lists `prompt_id` as a common field on every ledger row without qualification, but VERIFIED_FACTS.md states `prompt_id` is 'absent until first input' on the underlying hook payload (e.g. an early `session_start` row occurs before any `UserPromptSubmit`). It is unspecified whether the ledger row should store `null`, omit the key, or use a placeholder, which blocks writing the row TypedDict and parser.",
+    "evidence": "PLAN.md:155 'Common fields on every row: `schema_v`, `ts`, `event`, `session_id`, `prompt_id`, `agent_id`, `plugin_version`, `permission_mode`.' versus VERIFIED_FACTS.md:29 'A10 | Common input fields: `session_id`, `prompt_id` (UUID per user prompt, v2.1.196+, absent until first input); ...'",
+    "fix": "Add to PLAN.md section 4.3: 'When the underlying hook payload has no `prompt_id` (any event before the session's first `UserPromptSubmit`), the ledger row stores `\"prompt_id\": null` explicitly \u2014 never omit the key and never substitute an empty string. The row TypedDict types this field `str | None`.'"
+   },
+   {
+    "id": "I8",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "Call Jev only if any holds",
+    "issue": "The G-STOP evidence gate and the loop guard (D-015) are both keyed by `prompt_id`, but neither specifies behavior when the current Stop event's `prompt_id` is null (per A10, possible before the first user prompt). It is unclear whether gating/guarding falls back to a per-session bucket, is skipped entirely, or errors.",
+    "evidence": "PLAN.md:186 'G-STOP | Call Jev only if any holds: an unresolved error or soft-fail candidate exists for this `prompt_id`; ...' and DECISIONS.md:75 'At most 1 block per `(session_id, prompt_id, agent_id)` by default...' \u2014 neither mentions a null `prompt_id` case.",
+    "fix": "Add to PLAN.md section 5.0 (near G-STOP) and DECISIONS.md D-015: 'When the Stop event's `prompt_id` is null, gates and the loop guard use the key `(session_id, None, agent_id)` as a single bucket that can occur at most once per session (only before the first prompt); G-STOP still evaluates over ledger rows sharing that null prompt_id.'"
+   },
+   {
+    "id": "I9",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "~/.verdict/interpreter",
+    "issue": "The launcher resolution order names `~/.verdict/interpreter` as a fallback source of the Python interpreter path, but no section specifies who creates or updates this file, its format, or what happens when its recorded interpreter becomes stale (e.g. no longer exists, or newly fails the TLS trap in E3). Since the launcher fails open silently, a stale entry could silently disable Verdict for an entire machine with no visible signal, which the doctor/M1 gates must be able to detect.",
+    "evidence": "PLAN.md:147 'The launcher ... resolves the interpreter from `VERDICT_PYTHON`, then `~/.verdict/interpreter`, then `python3` on PATH, exits 0 silently if none exists...' \u2014 no other section defines how this file is written or refreshed. VERIFIED_FACTS.md:90 documents the TLS trap (E3) that a previously-good interpreter file could later hit.",
+    "fix": "Add to PLAN.md section 4.2: '`~/.verdict/interpreter` is a one-line text file containing an absolute interpreter path, written only by `verdict doctor --fix-interpreter` (also run once by `make setup`), which probes `/usr/bin/python3`, PATH `python3`, and `VERDICT_PYTHON` in order, keeping the first that both starts under 60 ms and completes a TLS handshake per D-012. The launcher never re-validates the file per invocation (that would cost latency); if the recorded interpreter later fails, the hook fails open per the model-path rule and `hook.log` records the exception, and `verdict doctor` (run manually, part of G1.6) re-probes and rewrites the file.'"
+   },
+   {
+    "id": "I10",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "a two-line ask and `docs/CONSENT.md`",
+    "issue": "M1's task list requires sending `docs/CONSENT.md` to contributors on day 4, and section 9.1 specifies what that document must contain, but no milestone task anywhere assigns writing `docs/CONSENT.md`. Without an explicit authoring task, this document risks being skipped or written ad hoc without the required content (what is sent to the provider, that raw text stays local, revocation instructions).",
+    "evidence": "PLAN.md:342 'Install on the owner's machine for every session. Send to 3 to 5 contributors on day 4 with a two-line ask and `docs/CONSENT.md`.' PLAN.md:428 describes required contents but assigns no author or milestone: 'Consent (`docs/CONSENT.md`, signed before install): what is sent to the provider; raw text stays local; ...'",
+    "fix": "Add a bullet to PLAN.md's M1 task list, immediately before line 342: 'Write `docs/CONSENT.md` per section 9.1's required contents (what is sent to the provider, that raw text stays local, that only derived rows/labels are shared under MIT in a public repo, and how to revoke) before day 4.'"
+   },
+   {
+    "id": "I11",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "scripts/check_name.sh <name>",
+    "issue": "G0.1 requires `scripts/check_name.sh` to exit 0 as an M0 gate, and the script is described as checking 'PyPI, npm, GitHub user, existing Claude Code plugins, reserved marketplace names,' but no source (API, registry, or document) is cited for the last two checks, and none appears in VERIFIED_FACTS.md. Per the project's own Citation rule ('never state ... a contract clause you have not read in a source'), this blocks writing the script for those two checks without inventing a data source.",
+    "evidence": "PLAN.md:324 'Decide the name (O-1) with `scripts/check_name.sh <name>`: PyPI, npm, GitHub user, existing Claude Code plugins, reserved marketplace names.' and PLAN.md:332 'G0.1 `scripts/check_name.sh \"$NAME\"` exits 0.' \u2014 VERIFIED_FACTS.md never documents a plugin-name registry or a 'reserved marketplace names' list.",
+    "fix": "Add to PLAN.md section 7 (M0): '`scripts/check_name.sh` checks: PyPI via `GET https://pypi.org/pypi/<name>/json` (404 = free), npm via `GET https://registry.npmjs.org/<name>` (404 = free), GitHub username via `gh api users/<name>` (404 = free). The \"existing Claude Code plugins\" and \"reserved marketplace names\" checks are removed from the gate (no registry or API for either is verified in `docs/VERIFIED_FACTS.md`); if the owner wants them, verify a source first and add a VERIFIED_FACTS.md row before coding against it, per the Citation rule.'"
+   },
+   {
+    "id": "I12",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "record-only stub plugin",
+    "issue": "M0's `make capture-fixtures` step requires capturing real hook stdin for all eight events using 'a record-only stub plugin,' but the real launcher, `hooks.json`, and `verdict_hook.py` entry point (the only things that would let a plugin receive hook stdin) are M1 deliverables, and CLAUDE.md states 'no code yet' before M0 starts. The stub plugin's own structure (its hooks.json, its dump mechanism, output location) is never specified, so it's unclear whether it's a separate throwaway artifact or an early, under-specified version of the real plugin.",
+    "evidence": "PLAN.md:328 'make capture-fixtures with a record-only stub plugin: real stdin JSON for all eight events, ...' \u2014 CLAUDE.md:5 'Status (2026-09-20): planning complete, no code yet.' PLAN.md:339 (M1) is where `hooks.json`/`run.sh`/`verdict_hook.py` are actually built.",
+    "fix": "Add to PLAN.md section 7 (M0): 'The M0 stub plugin lives at `scripts/fixture_capture_plugin/` (never under `plugin/`), with its own minimal `hooks.json` registering all eight events with matcher `*`, each running a one-line command `cat > tests/fixtures/hooks/raw/<event>-$(date +%s%N).json` and exiting 0 with empty stdout. It is unrelated to and superseded by the real `plugin/hooks/hooks.json` built in M1, and is never referenced by it.'"
+   },
+   {
+    "id": "I13",
+    "severity": "low",
+    "file": "docs/PLAN.md",
+    "location": "smoke_jev.py --n 30 --provider openrouter --provider typesafe",
+    "issue": "The M0 smoke-test command passes `--provider` twice in a single invocation, which is unusual CLI syntax that is never explained. It is unclear whether this means 'run against both providers in one call' (requiring `argparse action='append'`) or is a typo, blocking the exact implementation of the script's argument parsing.",
+    "evidence": "PLAN.md:327 '`scripts/smoke_jev.py --n 30 --provider openrouter --provider typesafe --questions 6 --state-tokens 1200 --json`: a Stop-shaped payload, reporting `conn_ms` and `infer_ms` at p50, p90, p99 per provider, ...'",
+    "fix": "Add a parenthetical after the command in PLAN.md:327: '(`--provider` accepts multiple values via `argparse action=\"append\"`; passing it twice runs the full `--n` sweep against both `openrouter` and `typesafe` in the same invocation and reports each provider's p50/p90/p99 as separate keyed entries in the output JSON.)'"
+   },
+   {
+    "id": "I14",
+    "severity": "low",
+    "file": "CLAUDE.md",
+    "location": "check = ruff, mypy --strict, import-ban, schema and ledger tests",
+    "issue": "CLAUDE.md describes `make check` as running '... schema and ledger tests' while PLAN.md describes the same target as running '... ledger-schema test, findings-ledger test' \u2014 different wording that could name the same two checks or two different pairs of checks. Neither document defines what a 'findings-ledger test' actually asserts about `docs/FINDINGS_LEDGER.md`, which is otherwise unread in this task's required-reading list.",
+    "evidence": "CLAUDE.md:80 'make setup | check | test | test-fast # check = ruff, mypy --strict, import-ban, schema and ledger tests' versus PLAN.md:311 '**Makefile targets.** `setup`, `check` (ruff, mypy, import-ban test, ledger-schema test, findings-ledger test), `test`, ...'",
+    "fix": "Change CLAUDE.md:80 to match PLAN.md's wording exactly: 'check = ruff, mypy --strict, import-ban, ledger-schema test, findings-ledger test', and add one sentence to PLAN.md section 6: 'The findings-ledger test parses `docs/FINDINGS_LEDGER.md` and fails if any finding id cited by a code comment (e.g. `# ledger: A2`) is missing from the table, or if the table has fewer than 97 rows.'"
+   },
+   {
+    "id": "I15",
+    "severity": "low",
+    "file": "docs/PLAN.md",
+    "location": "TLS handshake per provider with ms, key present or absent",
+    "issue": "M1's `verdict doctor` spec includes a per-provider TLS handshake check and 'key present or absent' reporting, and G1.6 requires `doctor` to exit 0 on the owner's machine 'including under the TLS-broken interpreter (E3).' It is not stated whether a failed reachability probe or an absent key (the expected M1 state per E4) is allowed to still exit 0, versus being treated as a doctor failure \u2014 this determines whether G1.6 is even passable in the documented key-free, network-uncertain M1 environment.",
+    "evidence": "PLAN.md:340 'verdict doctor (interpreter and version, TLS handshake per provider with ms, key present or absent, ...)' and PLAN.md:350 'G1.6 `verdict doctor` exits 0 on the owner's machine, including under the TLS-broken interpreter (E3).' VERIFIED_FACTS.md:91 'E4 | No `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, or `ANTHROPIC_API_KEY` was set as of 2026-09-20.'",
+    "fix": "Add to PLAN.md's M1 gate G1.6 (near line 350): 'doctor's exit code reflects only interpreter resolution, data-dir permissions/modes, and plugin registration; the per-provider TLS/reachability line and the \"key present or absent\" line are informational output only and never affect the exit code \u2014 `doctor` must exit 0 in M1 with zero keys configured (per E4) and even if both providers are unreachable.'"
+   }
+  ]
+ },
+ "consistency": {
+  "summary": "Reviewed CLAUDE.md, docs/PLAN.md, docs/DECISIONS.md, docs/VERIFIED_FACTS.md, docs/FINDINGS_LEDGER.md and docs/archive/VERDICT_PLAN.original.md. 15 real problems, most consequential first. The worst cluster is sequencing around M1: the collector ships on day 3-5 and its data is the irreplaceable study corpus, yet (a) the 14-day retention default deletes that corpus before M3/M4 can label it, (b) five ledger fields the schema requires are produced by modules that do not exist until M2, (c) the redactor that writes those rows is unmeasured until M2 although contributors install on day 4, and (d) `verdict index`, the D-012 CA fallback and the schemas that M1 gates depend on are all scheduled later. Two PLAN sections also contradict fixed decisions (D-004 on SessionStart network, D-014 vs the section 9.6 randomized arm), three section 7 gates are not runnable commands or point at commands no milestone builds (G2.6 `verdict bench`, G3.4 self-reported, G4.5 spend), the headline rate has a 5-person publication floor that the default contributor plan cannot reach, and one original-plan item (the `outcomes` / did-the-task-actually-succeed record) disappeared with no disposition while section 9.6 still reports recovery rate.",
+  "issues": [
+   {
+    "id": "V-01",
+    "severity": "critical",
+    "file": "docs/PLAN.md",
+    "location": "Section 4.3, \"Retention: `store.retention_days` default 14 for raw excerpts.\"",
+    "issue": "The 14-day retention default destroys the study corpus before it can be labeled. Collection starts day 3 and the plan itself says this data cannot be recreated, but blinded labeling needs the raw `final_message_excerpt` and `out_head`/`out_tail`, and that work does not start until day 13 (M3) and runs through day 28 (M4). Every session recorded on days 3-14 is pruned by SessionEnd before or during labeling, and the same prune removes the `post_fail` strings section 9.7 needs to build the synthetic track.",
+    "evidence": "PLAN:173 \"Retention: `store.retention_days` default 14 for raw excerpts. `SessionEnd` runs a bounded prune (at most 200 files examined).\" vs PLAN:320 \"Labeled real data is the slowest resource and cannot be compressed later, so collection starts on day 3.\", PLAN:427 \"Target at least 1,000 raw stops by day 24\", PLAN:368 \"### M3 Labeling and report tooling (days 13 to 18\", PLAN:382 \"### M4 Evaluation and baselines (days 19 to 28\".",
+    "fix": "In PLAN section 4.3 replace the retention sentence with: \"Retention: `store.retention_days` default 45 during the study (M1 through M4), dropping to 14 at v1.0. The prune never deletes a session that has no labels yet and is inside the corpus window, or whose stops appear in `data/goldset/`.\" Make the same change in section 10 (\"14-day retention\" -> \"45-day retention during the study, 14 from v1.0\") and in DECISIONS D-017 item (3), and state the study retention window in `docs/CONSENT.md` before it is sent to contributors on day 4."
+   },
+   {
+    "id": "V-02",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "Section 9.6, \"Arm 0 is shadow (judge and record, no block, no nudge). Arm 1 is live.\"",
+    "issue": "The randomized arm experiment is listed as an M4 deliverable but can produce no arm-1 data at M4, and it contradicts D-014. D-014 fixes the default mode as shadow through M4, and PLAN 5.3 says that in shadow mode the action is always `pass`, so no session runs live before M5. No milestone builds arm assignment or `install_salt` either, although `arm` is a required field on every stop row from M1. The nudge, the other treatment in 9.6, is likewise built by no milestone (M0-M6).",
+    "evidence": "PLAN:384 (M4) \"randomized arm analysis\"; PLAN:464 \"Assignment: `arm = sha256(session_id + install_salt) % 2`, stored once per session so every hook agrees. Arm 0 is shadow ... Arm 1 is live.\"; DECISIONS:71 (D-014) \"Default is `shadow` through M4.\"; PLAN:258 \"In `shadow` mode the action is always `pass`\"; PLAN:164 stop row field list ends \"`background_tasks_n`, `arm`\"; PLAN:207 nudge \"exists only as an experiment arm (section 9.6)\" with no milestone building it.",
+    "fix": "Delete \"randomized arm analysis\" from the M4 deliverable list in section 7 and move the arm experiment and the PostToolUse nudge into section 12 (M6) as one separately scoped item. In section 9.6 add a first line: \"This experiment is post-launch (M6); until it runs, recovery rate and any nudge effect are descriptive, not causal.\" Either drop `arm` from the section 4.3 stop row, or keep it and add to M1: \"`install_salt` written once to `~/.verdict/salt`; `arm = sha256(session_id + install_salt) % 2` computed once per session and stamped on every row (recorded only; it changes no behavior in v1).\""
+   },
+   {
+    "id": "V-03",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "Section 7, M1 deliverable list beginning \"Launcher, strict stdin parsers, `ledger.py`\"",
+    "issue": "M1 recorders must write ledger fields whose producers are not built until M2. The section 4.3 schema requires `is_check` and `soft_fail_candidate` on every `post` row and `claims[]` and `gate_reason` on every `stop` row, but those values come from `gates.py` (G-SOFT, G-CHECK patterns), `claims.py` and the runner set / patterns in `plugin/policies/default.json`, all listed as M2 work. The M1 never-send check has the same problem: section 5.5 puts the never-send list in the policy file. Since M1 data is the corpus that cannot be recollected, it will either be missing these fields or be computed by a second, throwaway implementation that drifts from the M2 one.",
+    "evidence": "PLAN:162 post row \"`is_check` (command matches the runner set), `soft_fail_candidate`\"; PLAN:164 stop row \"`claims[]`, `gate_reason`\"; PLAN:339 (M1) \"...never-send check, an initial redactor (M2 completes it), recorders for `session_start`, `prompt`, `post`, `post_fail`, `stop` (record only)\"; PLAN:354 (M2) \"`gates.py`, `claims.py`, `state.py` ... `policy.py`\"; PLAN:270 \"`plugin/policies/default.json` carries `policy_version`, thresholds, gate patterns, rule tables, the never-send list, the runner set\".",
+    "fix": "Move the pattern-only parts of M2 into M1: add to the M1 deliverable list \"`plugin/policies/default.json` v1 (never-send list, runner set, soft-failure patterns, gate constants) with `schemas/policy-v1.json`; `gates.py` G-SOFT and G-CHECK tagging; `claims.py` claim extraction (recorded on the stop row, not yet judged)\" and raise M1 from about 10 h to about 14 h (and M2 from 22 h to 18 h, keeping the 98 h total). Remove those items from the M2 list, leaving M2 with G-STOP, state, questions, provider, policy, guard and rules."
+   },
+   {
+    "id": "V-04",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "Section 7, M1 bullet \"an initial redactor (M2 completes it)\"",
+    "issue": "Contributors are recruited and install the collector on day 4 (M1), but the redactor that writes their ledger is explicitly incomplete until M2 and its recall is not measured until gate G2.5 on day 12. D-017 and CLAUDE.md state measured redaction as an invariant, and `docs/CONSENT.md` is handed to contributors on day 4, i.e. eight days before any evidence exists that secrets are actually scrubbed from the rows already on their disks.",
+    "evidence": "PLAN:339 \"...never-send check, an initial redactor (M2 completes it)...\"; PLAN:342 \"Send to 3 to 5 contributors on day 4 with a two-line ask and `docs/CONSENT.md`.\"; PLAN:356 (M2) \"`make gen-redact`: compile the pinned gitleaks rules ... Corpus: about 200 synthetic secrets and 200 hard negatives\"; PLAN:365 \"G2.5 Redaction: recall at least 0.95 and false-positive rate at most 0.02 on the corpus\"; DECISIONS:83 (D-017) \"One `redact()` function, generated from a pinned gitleaks rule set plus entropy rules\".",
+    "fix": "Move `make gen-redact`, `tests/fixtures/secrets_corpus.jsonl` and the redaction measurement into M1, and add a gate: \"G1.7 `make test` prints redaction recall at least 0.95 and false-positive rate at most 0.02 on the corpus, and the sentinel-key test proves no key appears in the ledger or `hook.log`. The collector is not sent to contributors until G1.7 exits 0.\" Delete \"an initial redactor (M2 completes it)\" from M1 and the redactor bullet from M2, leaving only the transport-patching test in G2.5."
+   },
+   {
+    "id": "V-05",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "Section 4.2 hook table, SessionStart row, Network column \"one optional reachability probe, cached 24 h\"",
+    "issue": "PLAN gives the SessionStart hook a network call, which D-004 forbids; DECISIONS outranks PLAN. It also contradicts the v0.1 definition of done (\"network-free plugin\") and the M1 README egress statement (\"collector mode: nothing leaves the machine\"), since the probe opens a TLS connection to the provider from inside a session with no key configured.",
+    "evidence": "PLAN:136 SessionStart row \"| 5 | 1.5 s | one optional reachability probe, cached 24 h |\" and PLAN:93 \"SessionStart \u2500\u2500\u2500\u2500\u2500\u25b6 record session, self-check (python, data dir, provider reachability)\" vs DECISIONS:25-27 (D-004) \"All recorder hooks are synchronous and make no network calls ... `SessionStart`, `SessionEnd` handlers append one row and exit.\" and PLAN:41 \"Key-free, network-free plugin that records the ledger\", PLAN:341 \"README with the egress statement (collector mode: nothing leaves the machine)\".",
+    "fix": "In the section 4.2 table set the SessionStart Network cell to \"never\" and the internal deadline to 200 ms, and change the section 4 diagram line to \"SessionStart \u2500\u25b6 record session, self-check (python, data dir, config)\". Move provider reachability to `verdict doctor` only, and update section 5.3 / 13 wording \"surfaced by `SessionStart` when it persists\" to \"surfaced by `verdict doctor` and by a `gate_unavailable` count in `verdict stats`\"."
+   },
+   {
+    "id": "V-06",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "Section 9.5, \"Publish only with at least 5 people\"",
+    "issue": "The headline number cannot be published under the plan's own default contributor plan. Section 9.5 sets a floor of 5 people for the unsupported-success-claim rate, but O-5's default is 3 to 5 contributors (owner plus 3 = 4 people at the low end), M1 recruits \"3 to 5 contributors\", and the section 11 two-week target is 3 external corpora, i.e. 4 people. The launch narrative in section 11 and the M5 blog post both lead with that rate, so a plausible outcome is a launch with no headline number and no contingency written down.",
+    "evidence": "PLAN:458 \"Interval: cluster bootstrap resampling people, then stops. Publish only with at least 5 people\"; PLAN:85 (O-5) \"3 to 5 people run the collector from day 4\"; PLAN:342 \"Send to 3 to 5 contributors on day 4\"; PLAN:516 \"External corpora returned ... | 3 | 8\"; PLAN:520 \"Launch narrative: the mechanism (exit codes from hooks), the honest headline rate with its interval\".",
+    "fix": "Change O-5's default column to \"Owner plus at least 5 external people (recruit 7 to allow dropout) run the collector from day 4\", change the M1 bullet to \"Send to at least 5 contributors on day 4\", change the section 11 two-week target for external corpora from 3 to 5, and add to section 9.5 after the 5-person sentence: \"With fewer than 5 contributing people, report per-person rates and the owner's own rate only, labeled single-author pilot, and publish no pooled headline.\" Add the matching row to the section 13 risk table."
+   },
+   {
+    "id": "V-07",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "Gate \"G3.4\"",
+    "issue": "G3.4 is not a testable gate: `verdict stats` reads only the local `~/.verdict`, so it cannot show stops \"across all machines\", and the gate itself admits the number is self-reported by contributors. This violates the plan's own rule 7 and CLAUDE.md rule 8. G4.5 has the same defect (a claim about spend, not a command that exits non-zero).",
+    "evidence": "PLAN:380 \"G3.4 `verdict stats --count` shows at least 400 real stops collected so far across all machines (self-reported by contributors).\"; PLAN:18 \"Every gate in section 7 is a command that exits non-zero on failure.\"; PLAN:391 \"G4.5 Spend stayed under every cap in section 9.8 (each harness aborts at its cap).\"; PLAN:340 defines `verdict stats` over the local ledger only.",
+    "fix": "Replace G3.4 with: \"G3.4 `verdict eval --corpus data/goldset/ --count-stops` exits 0 only if the committed derived rows hold at least 400 real stops from at least 3 distinct `contributor_id` values.\" Add to the M3 deliverable list \"contributors run `verdict export --goldset` and send derived rows; rows land in `data/goldset/`\". Replace G4.5 with: \"G4.5 `make eval` prints running spend per harness and exits non-zero if any section 9.8 cap was exceeded (a `reports/spend-<date>.json` ledger is written by every harness).\""
+   },
+   {
+    "id": "V-08",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "Gate \"G2.6\"",
+    "issue": "G2.6 invokes `verdict bench`, a command no milestone builds and which appears in no command list. The CLI surface in section 4.1 and CLAUDE.md does not include `bench`, and the Makefile target list has `bench-hook` and `bench-provider` instead (G1.2 uses `make bench-hook`). As written the M2 gate cannot be run.",
+    "evidence": "PLAN:366 \"G2.6 `verdict bench --n 50` prints added latency per hook\" vs PLAN:125 CLI list \"`stats`, `show`, `doctor`, `index`, `replay`, `purge`, `export`, `label`, `report`, `eval`, `import`\", PLAN:311 \"**Makefile targets.** `setup`, `check` ... `bench-hook`, `bench-provider` ...\", PLAN:346 \"G1.2 `make bench-hook` exits 0 only if ...\".",
+    "fix": "Rewrite G2.6 as: \"G2.6 `make bench-hook` and `make bench-provider --n 50` exit 0 only if recorder p50 is under 60 ms and Stop p50 is under 900 ms with p95 under 2,500 ms on the default provider.\" (Same commands as G1.2, so nothing new is introduced.) Do not add a `verdict bench` command unless it is also added to the section 4.1 CLI list, the CLAUDE.md command list, and the M2 deliverables."
+   },
+   {
+    "id": "V-09",
+    "severity": "high",
+    "file": "docs/PLAN.md",
+    "location": "Gate \"G1.6\"",
+    "issue": "G1.6 requires `verdict doctor` to exit 0 at M1 including under the TLS-broken interpreter, but the code that makes that possible ships in M2. D-012's fix is the SSL context with the system CA fallback, which lives in `provider.py`, an M2 deliverable. At M1 a TLS handshake on the E3 interpreter fails with CERTIFICATE_VERIFY_FAILED, so the gate cannot pass. The gate also makes the \"network-free\" v0.1 collector open provider connections.",
+    "evidence": "PLAN:350 \"G1.6 `verdict doctor` exits 0 on the owner's machine, including under the TLS-broken interpreter (E3).\"; PLAN:340 doctor spec \"TLS handshake per provider with ms\"; PLAN:354 (M2) \"`questions.py` (golden-file tested), `provider.py`, `policy.py`\"; DECISIONS:64 (D-012) \"Build the SSL context from the default store and, if it is empty, load the first existing of `/etc/ssl/cert.pem` ...\"; VERIFIED_FACTS:90 (E3).",
+    "fix": "Add to the M1 deliverable list: \"`sslctx.py` in `verdict_hot`, implementing the D-012 context and CA fallback; `provider.py` in M2 imports it unchanged.\" Keep G1.6 as written. If the owner prefers not to move that code, restate G1.6 as \"G1.6 `verdict doctor` exits 0 on the owner's machine on `/usr/bin/python3` and the PATH python; the TLS-broken-interpreter case (E3) is gated at G2.7 once the D-012 fallback ships\" and add G2.7 to M2."
+   },
+   {
+    "id": "V-10",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "Section 4 diagram, \"\u251c\u2500 verdict stats | show | replay | doctor | purge | export\"",
+    "issue": "The architecture makes six commands read the derived SQLite index, but `verdict index` is an M3 deliverable while `stats` and `doctor` ship in M1 and `show`, `replay`, `purge` and `export` ship in M2. Either those commands read JSONL directly (and the diagram is wrong) or they cannot be built when scheduled.",
+    "evidence": "PLAN:110-113 \"\u25bc  verdict index  (derived, disposable) / ~/.verdict/index.db (stdlib sqlite3) / \u251c\u2500 verdict stats | show | replay | doctor | purge | export\"; PLAN:370 (M3) \"- `verdict index`, `docs/RUBRIC.md` and `docs/LABELING.md`\"; PLAN:340 (M1) \"CLI: `verdict stats` ... `verdict doctor`\"; PLAN:357 (M2) \"`verdict show <session>`, `verdict replay`, `verdict purge`, `verdict export`\".",
+    "fix": "Move `verdict index` into M1 (it is stdlib `sqlite3` and `stats` already needs the scan) and delete it from the M3 bullet, or else change the section 4 diagram to \"\u251c\u2500 verdict stats | show | replay | doctor | purge | export   (read the JSONL directly)\" and \"\u25bc verdict index (derived, disposable; used by label, report and eval from M3)\" and match section 4.1's CLI row."
+   },
+   {
+    "id": "V-11",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "Section 5.3, \"`user_task` = prompt rows for this `prompt_id` (first prompt plus later corrections, at most 1,500 tokens)\"",
+    "issue": "This is impossible as specified. A10 states `prompt_id` is a UUID per user prompt, so there is exactly one prompt row per `prompt_id` and \"later corrections\" always carry a different id. The same scoping bug is in the G-STOP gate and in \"`ledger` = this prompt's `post` and `post_fail` rows\": a failure recorded before the user's correction becomes invisible to the verifier, which is exactly the case the product exists to catch.",
+    "evidence": "PLAN:213 \"`user_task` = prompt rows for this `prompt_id` (first prompt plus later corrections, at most 1,500 tokens)\"; PLAN:186 G-STOP \"an **unresolved** error or soft-fail candidate exists for this `prompt_id`\"; VERIFIED_FACTS:29 (A10) \"`prompt_id` (UUID per user prompt, v2.1.196+, absent until first input)\".",
+    "fix": "In section 5.3 replace the Inputs sentence with: \"`user_task` = the prompt row for this `prompt_id` plus every earlier prompt row in this `session_id` since the last Stop that was not blocked, at most 1,500 tokens. `ledger` = `post` and `post_fail` rows for that same span, in order.\" Use the identical span in G-STOP (section 5.0) and state that the loop guard key stays `(session_id, prompt_id, agent_id)` per D-015."
+   },
+   {
+    "id": "V-12",
+    "severity": "medium",
+    "file": "CLAUDE.md",
+    "location": "Heading \"## Commands (available from M0 onward; they do not exist yet)\"",
+    "issue": "The heading tells a coding agent that every listed command is available from M0, when most are built much later: `make index | replay | report | doctor` span M1 to M3 and `make eval | eval-guard | freeze-reporting-set` are M4. An agent starting M1 will try to run them, or will assume it must build them all in M0. The list also includes `make e2e-cheap` and `make plugin-validate`, which are M0/M1, with no way to tell them apart.",
+    "evidence": "CLAUDE.md:77 \"## Commands (available from M0 onward; they do not exist yet)\" over a block listing `make eval | eval-guard | freeze-reporting-set` and `make index | replay | report | doctor`; PLAN:370 builds `verdict index` in M3 and PLAN:384 builds `make eval` in M4.",
+    "fix": "Change the heading to \"## Commands (none exist yet; the milestone that builds each is in brackets)\" and annotate the block: `setup|check|test|test-fast` [M0], `capture-fixtures|plugin-validate` [M0], `bench-hook|e2e-cheap|doctor` [M1], `gen-redact|replay` [M2], `index|report` [M3], `bench-provider` [M2], `eval|eval-guard|freeze-reporting-set` [M4]."
+   },
+   {
+    "id": "V-13",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "Gate \"G1.1\"",
+    "issue": "G1.1 runs `make check`, which includes a ledger-schema test, but `schemas/ledger-v1.json` appears only in the repo-layout tree and is not a deliverable of M0 or M1. Two further commands are referenced but exist in no milestone and no command list: `verdict migrate` (section 4.3 makes it the only thing allowed to raise `schema_v`, and section 10's upgrade CI job depends on that behavior) and `verdict policy lint` (built in M2 but missing from the section 4.1 and CLAUDE.md CLI lists).",
+    "evidence": "PLAN:345 \"G1.1 `make check test` exits 0.\" with PLAN:311 \"`check` (ruff, mypy, import-ban test, ledger-schema test, findings-ledger test)\"; PLAN:294 \"\u251c\u2500\u2500 schemas/policy-v1.json  schemas/ledger-v1.json\" is the only mention; PLAN:153 \"only `verdict migrate` raises versions\"; PLAN:125 and CLAUDE.md:70 CLI lists omit both `migrate` and `policy lint`.",
+    "fix": "Add \"`schemas/ledger-v1.json` and a `make check` test that validates every fixture row against it\" to the M1 deliverable list, and \"`schemas/policy-v1.json`\" to M2. Add `migrate` and `policy lint` to the CLI lists in PLAN section 4.1 and CLAUDE.md, and add \"`verdict migrate` (raises `schema_v`, drains `~/.verdict/pending/`)\" to the M2 deliverable list alongside `UPGRADING.md`."
+   },
+   {
+    "id": "V-14",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "Section 1, \"This covers jev-belay's two stated blind spots\"",
+    "issue": "The plan asserts two stated blind spots for jev-belay, but the verified fact records one. The second (\"checks run through scripts not on a runner list\") is an inference from jev-belay's regex gates, not something a source says it states. This is the plan's headline differentiator and it feeds the section 9.5 blind-spot slices and the M5 blog post, so an unsourced competitor claim is exactly what CLAUDE.md rule 3 forbids going into public copy.",
+    "evidence": "PLAN:30 \"This covers jev-belay's two stated blind spots: turns with no file edits, and checks run through scripts not on a runner list.\" vs VERIFIED_FACTS:97 (F1) \"Its stated blind spot is turns with no file edits.\"; CLAUDE.md:19 \"Never state or code against an API field, CLI flag, or contract clause you have not read in a source during this session.\"",
+    "fix": "Either add a verified row to VERIFIED_FACTS section F citing jev-belay's README for the second blind spot, or rewrite PLAN section 1 item 1 as: \"This covers jev-belay's stated blind spot, turns with no file edits (F1), and a second gap implied by its runner-list regex gate, checks run through scripts not on that list (inferred, unverified; confirm against its README before publishing).\" Use the same hedge in section 9.5's blind-spot slices."
+   },
+   {
+    "id": "V-15",
+    "severity": "medium",
+    "file": "docs/PLAN.md",
+    "location": "Section 9.6, \"\\\"Recovery rate\\\" and \\\"the nudge changes behavior\\\" are treatment effects\"",
+    "issue": "Scope from the original plan disappeared with no disposition: the `outcomes` record of whether the task actually succeeded. It is not in the section 4.3 data model, not in section 2's change table, not an open decision in section 3, not in section 12, and the findings ledger never mentions it (CC-11 covers only the `sessions` table). Yet section 9.6 still reports recovery rate, whose original definition depended on that record, so the metric now has no named data source.",
+    "evidence": "docs/archive/VERDICT_PLAN.original.md:112 \"`outcomes(id, session_id, source[user|test|ci], value, ts)` \u2014 did the task actually succeed? Used for RL extension and calibration-vs-outcome.\"; original:275 \"**Recovery rate:** of blocked stops, fraction where Claude's continuation actually fixed the issue (from PostToolUse verdicts + your label).\"; PLAN:464 keeps recovery rate; grep for \"outcome\" in PLAN finds only the `hook.log` field (PLAN:169) and doctor's log summary (PLAN:340).",
+    "fix": "Add a row to section 2: \"| 21 | `outcomes` table recording whether the task actually succeeded | Dropped. No trustworthy local source; recovery is derived from later `is_check` rows with `status=ok` for the same prompt span and from a human label, and is reported as descriptive. | section 9.6 |\". In section 9.6 define the source explicitly: \"Recovery rate numerator: blocked stops where a later `is_check` row with `status=ok` follows the block for the same prompt span, confirmed by a human label in `labels.jsonl` with `question_key=recovered`.\" Add `recovered` to the section 9.3 label set."
+   }
+  ]
+ },
+ "factcheck": {
+  "summary": "Checked all 20 rows of section A, 10 of B, 13 of C, 5 of D and the 4 measurements in E against the local primary-source dumps, plus two pages fetched live (`/docs/en/sessions.md` for A12, `/docs/en/tools-reference.md` for the tool-name questions), and re-ran the launcher and TLS measurements on this machine. Most rows hold: A1, A4, A6-A12, A14, A16-A20, B1-B3, B5-B10, C1-C7, C9-C11, D1-D5 and E2-E4 check out exactly, including the \"fork\" SessionStart source, the 8-consecutive-stop-block cap, the 10,000-character output cap, the 600 s command default on Stop, the 1.5 s SessionEnd budget, TypeSafe's 64k/32k context split, $0.042/Mtok, 250,000 tok/s + 1,200 rpm, and OpenRouter's 32,000-token listing and `text->decisions` modality. A12's quote, which is in none of the saved dumps, was found verbatim at `/docs/en/sessions.md:227`. Eleven problems remain, listed below. The two that matter most are a measurement in E1 that does not hold under the interpreter flags PLAN 4.2 actually mandates (38 ms becomes 106 ms), and A2 understating what a `PostToolUseFailure` hook may return. On the specific questions asked: `fork` is a valid SessionStart source; `compact` is also valid and its omission from PLAN 4.2 is a real, if small, gap; there is no tool called `Task` (the subagent tool is `Agent`), while `NotebookEdit` and `WebFetch` are both real; and `python -S -E script.py` does still put the script's directory on `sys.path[0]` (verified empirically).",
+  "issues": [
+   {
+    "id": "VF-01",
+    "severity": "critical",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/VERIFIED_FACTS.md",
+    "location": "E1",
+    "issue": "The `/usr/bin/python3` 3.9.6 cold-start figure was measured without the `-S -E` flags the launcher in PLAN 4.2 mandates. Under `-E`, Apple's system Python takes 106 ms for the same four stdlib imports, not 38 ms. The row is the budget the entire hot path is designed around (PostToolUse internal deadline 200 ms, UserPromptSubmit 200 ms), so the real headroom is roughly a third of what the row implies.",
+    "evidence": "VERIFIED_FACTS.md E1: \"Under `/usr/bin/python3` 3.9.6, fork plus stdlib imports is about 38 ms.\" vs PLAN.md:147 \"`exec`s the interpreter with `-S -E` so no site-packages can load\". Measured on this machine, 25 runs each, `/usr/bin/python3 -c 'import json,sqlite3,http.client,ssl'`: plain min 36 / med 37 / p90 38 ms; `-S` med 37 ms; `-E` med 108 ms; `-S -E` min 104 / med 106 / p90 106 ms. Bare interpreter is unaffected (plain 18 ms, `-S -E` 20 ms), so the cost is in the imports, and it is `-E`, not `-S`, that triggers it. Reproduced with PYTHON* stripped from the environment and with a minimal `PATH=/usr/bin:/bin` environment, so it is not an environment artifact. Homebrew 3.14 shows no penalty (plain 29 ms, `-S -E` 29 ms).",
+    "fix": "Replace the last sentence of E1 with: \"Under `/usr/bin/python3` 3.9.6, the same stdlib imports cost about 38 ms plain but **106 ms under `-S -E`** (median of 25; `-E` alone causes the whole regression, `-S` costs nothing). Bare interpreter 18 ms plain, 20 ms under `-S -E`. Homebrew 3.14 is unaffected: 29 ms either way.\" Then either drop `-E` from the launcher in PLAN.md:147 and scrub `PYTHONPATH`/`PYTHONHOME` from the environment in the launcher instead, or re-derive the 200 ms PostToolUse deadline against 106 ms rather than 38 ms."
+   },
+   {
+    "id": "VF-02",
+    "severity": "high",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/VERIFIED_FACTS.md",
+    "location": "A2",
+    "issue": "The stated output contract for `PostToolUseFailure` is wrong: the event also honors top-level `decision: \"block\"` with a `reason`, which is delivered to Claude as a tool error while the turn continues. Saying `additionalContext` is the only output removes the one mechanism that puts a VERDICT finding in front of Claude as an error rather than as ambient context, on exactly the event PLAN 9.2 calls the project's free ground truth.",
+    "evidence": "VERIFIED_FACTS.md A2: \"Output: `hookSpecificOutput.additionalContext` only.\" Contradicted by cc_hooks.md:1047: \"| UserPromptSubmit, UserPromptExpansion, PostToolUse, PostToolUseFailure, PostToolBatch, Stop, SubagentStop, ConfigChange, PreCompact | Top-level `decision` | `decision: \\\"block\\\"`, `reason`.\" and cc_hooks.md:3590: \"`PostToolUseFailure` and `TaskCreated`: the reason is returned to Claude as a tool error and the turn continues, regardless of `continueOnBlock`\". (The event's own section, cc_hooks.md:2145-2158, lists only `additionalContext`, which is where the row's claim came from.)",
+    "fix": "Replace \"Output: `hookSpecificOutput.additionalContext` only.\" with \"Output: top-level `decision:\\\"block\\\"` plus `reason`, which is returned to Claude as a tool error while the turn continues (cc_hooks.md:1047, 3590), or `hookSpecificOutput.additionalContext` (cc_hooks.md:2145). Exit 2 shows stderr to Claude without blocking (cc_hooks.md:894).\""
+   },
+   {
+    "id": "VF-03",
+    "severity": "high",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/PLAN.md",
+    "location": "^(Bash\\|Write\\|Edit\\|NotebookEdit\\|WebFetch\\|Agent\\|Task\\|mcp__.*)$",
+    "issue": "`Task` is not a Claude Code tool name, so that alternative in the PostToolUse matcher can never fire. The subagent tool is `Agent` (already in the list). The real task tools are `TaskCreate`, `TaskGet`, `TaskList`, `TaskStop`, `TaskUpdate` and `TaskOutput`, none of which the anchored pattern matches either. `NotebookEdit` and `WebFetch` in the same row are both correct.",
+    "evidence": "cc_tools-reference.md:21 \"| `Agent` | Spawns a [subagent](/docs/en/sub-agents) with its own context window\"; :54 \"| `TaskCreate` |\"; `grep '^| `Task` ' cc_tools-reference.md` returns nothing. cc_hooks.md:2426: \"To inject context into the parent session after a subagent returns, use a [`PostToolUse`](#posttooluse) hook on the `Agent` tool instead.\" cc_hooks.md:1587 lists the built-in tool names as \"`Bash`, `PowerShell`, `Edit`, `Write`, `Read`, `Glob`, `Grep`, `Agent`, `Workflow`, `WebFetch`, `WebSearch`, `AskUserQuestion`, and `ExitPlanMode`\" \u2014 no `Task`. Confirmed real: cc_tools-reference.md:40 `NotebookEdit`, :63 `WebFetch`.",
+    "fix": "Change the PostToolUse matcher to `^(Bash|Write|Edit|NotebookEdit|WebFetch|Agent|mcp__.*)$`. If task-tool calls are actually wanted, add `TaskCreate|TaskUpdate` explicitly rather than `Task`."
+   },
+   {
+    "id": "VF-04",
+    "severity": "high",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/PLAN.md",
+    "location": "Agent/Task",
+    "issue": "Same non-existent tool name in the G-SOFT evidence gate. The gate is specified to run \"for Bash, Agent/Task, WebFetch\", so a reader implementing it against a `tool_name == \"Task\"` branch writes dead code, and the gate's hit-rate metric silently under-counts nothing (the branch never fires) while suggesting a tool set that does not exist.",
+    "evidence": "PLAN.md:184: \"| G-SOFT | On `PostToolUse` for Bash, Agent/Task, WebFetch: output matches the soft-failure pattern\". cc_tools-reference.md:21 lists `Agent` and has no `Task` entry; cc_hooks.md:1587 omits `Task` from the built-in tool names.",
+    "fix": "Replace \"for Bash, Agent/Task, WebFetch\" with \"for Bash, Agent, WebFetch\"."
+   },
+   {
+    "id": "VF-05",
+    "severity": "medium",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/VERIFIED_FACTS.md",
+    "location": "A15",
+    "issue": "Two errors in the exit-code contract. (a) Claude Code reads JSON output from stdout on every exit code, not only 0 \u2014 including exit 2, where a valid JSON blocking reason is used in place of stderr. (b) Exit-0 stdout is parsed as JSON only when it starts with `{` and ends with `}`; anything else is treated as plain text. PLAN section 8 requires the integration tests to assert \"exact stdout JSON and exit code\", so the wrong rule here becomes the wrong assertion.",
+    "evidence": "VERIFIED_FACTS.md A15: \"Exit codes: 0 parses stdout as JSON. 2 is a blocking error.\" Contradicted by cc_hooks.md:803: \"Claude Code reads [JSON output fields](#json-output) from stdout on every exit code, not just 0\"; cc_hooks.md:826: \"exit 2 blocks whether or not you print JSON... Claude Code still reads any valid [JSON output](#json-output) on stdout\"; cc_hooks.md:812: \"**Starts with `{` and ends with `}`**: Claude Code parses it as JSON... **Starts with `{` but doesn't end with `}`**: Claude Code treats it as plain text.\"",
+    "fix": "Replace the first sentence of A15 with: \"Claude Code reads stdout as JSON on **every** exit code, not just 0, and only when the output starts with `{` and ends with `}` (anything else is plain text). Exit 2 is a blocking error whose reason is the JSON blocking decision when present and stderr otherwise; JSON on stdout is still read on exit 2.\""
+   },
+   {
+    "id": "VF-06",
+    "severity": "medium",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/PLAN.md",
+    "location": "resolves the interpreter from",
+    "issue": "The launcher's interpreter fallback chain ends at `python3` on PATH, which on this machine is the python.org framework 3.14 that E3 documents as unable to verify TLS certificates. With no `VERDICT_PYTHON` and no `~/.verdict/interpreter`, the default install therefore picks an interpreter that fails every provider call, and the model path fails open on every session. No row in section E measures this default path end to end: E1 measures uv 3.13 and `/usr/bin/python3` 3.9.6, E3 measures 3.14 only to say it is broken.",
+    "evidence": "PLAN.md:147: \"resolves the interpreter from `VERDICT_PYTHON`, then `~/.verdict/interpreter`, then `python3` on PATH\". VERIFIED_FACTS.md E3: \"the python.org framework Python 3.14 that is first on PATH fails `CERTIFICATE_VERIFY_FAILED` against both providers\". Verified now: `which -a python3` \u2192 `/Library/Frameworks/Python.framework/Versions/3.14/bin/python3` first; that interpreter under `-S -E` against `api.typesafe.ai` returns `SSLCertVerificationError [SSL: CERTIFICATE_VERIFY_FAILED]`, while `/usr/bin/python3` and `/opt/homebrew/bin/python3` both return `OK 404`. Its `ssl.get_default_verify_paths()` points at `/Library/Frameworks/Python.framework/Versions/3.14/etc/openssl/cert.pem`, and that directory is empty.",
+    "fix": "In PLAN.md:147, add a validation step to the chain: after resolving a candidate interpreter, reject it and fall through to the next if `ssl.get_default_verify_paths().openssl_cafile` does not exist, and apply the E3 fix (load `/etc/ssl/cert.pem` with verification still on) in the provider client rather than assuming the resolved interpreter has a working CA store. Add a row to section E measuring the default-resolution interpreter end to end."
+   },
+   {
+    "id": "VF-07",
+    "severity": "medium",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/VERIFIED_FACTS.md",
+    "location": "A13",
+    "issue": "\"default 600 for command hooks\" is presented as unconditional but is only the default on most events. Claude Code lowers the command/http/mcp_tool default to 30 s on UserPromptSubmit (one of the events PLAN 4.2 registers), to 30 s on PreModelSwitch/PostModelSwitch and to 10 s on MessageDisplay. The row also gives no default for the `prompt` and `agent` handler types it lists, although A19 makes a prompt-based Stop hook \"a required baseline\" \u2014 those default to 30 s and 60 s.",
+    "evidence": "VERIFIED_FACTS.md A13: \"`timeout` in seconds (**default 600** for command hooks)\". cc_hooks.md:430: \"Defaults: 600 for `command`, `http`, and `mcp_tool`; 30 for `prompt`; 60 for `agent`. Claude Code lowers the `command`, `http`, and `mcp_tool` default to 30 on [`UserPromptSubmit`](#userpromptsubmit), [`PreModelSwitch`](#premodelswitch), and [`PostModelSwitch`](#postmodelswitch), and to 10 on [`MessageDisplay`](#messagedisplay).\" Also cc_hooks.md:1347 repeats the 30 s UserPromptSubmit default.",
+    "fix": "Replace the parenthetical with: \"`timeout` in seconds (defaults: 600 for `command`, `http`, `mcp_tool`; 30 for `prompt`; 60 for `agent`; the command/http/mcp_tool default drops to 30 on UserPromptSubmit, PreModelSwitch and PostModelSwitch, to 10 on MessageDisplay, and SessionEnd uses its own 1.5 s budget, A17)\"."
+   },
+   {
+    "id": "VF-08",
+    "severity": "medium",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/VERIFIED_FACTS.md",
+    "location": "A5",
+    "issue": "The bolded claim that `allow` skips the user's permission prompt drops two documented exceptions, both security-relevant for a plugin that ships a PreToolUse rules gate: `allow` does not auto-approve the actions no mode auto-approves, nor `AskUserQuestion`/`ExitPlanMode` without a paired `updatedInput`; and deny and ask permission rules are still evaluated whatever the hook returns. A row marked [O] that reads as \"a hook can wave anything through\" is the wrong thing for the highest-authority document to say.",
+    "evidence": "VERIFIED_FACTS.md A5: \"**`allow` skips the user's permission prompt.**\" cc_hooks.md:1814: \"`\\\"allow\\\"` skips the permission prompt, except for the [actions no mode auto-approves](/docs/en/permission-modes#actions-no-mode-auto-approves) and for `AskUserQuestion` and `ExitPlanMode`, which need [`updatedInput` paired with it](#allow-with-updatedinput)... [Deny and ask rules](/docs/en/permissions#manage-permissions) are still evaluated regardless of what the hook returns\".",
+    "fix": "Replace the bolded sentence with: \"**`allow` skips the user's permission prompt, except for the actions no mode auto-approves and for `AskUserQuestion`/`ExitPlanMode`, which need `updatedInput` paired with it; deny and ask permission rules are still evaluated whatever the hook returns.**\""
+   },
+   {
+    "id": "VF-09",
+    "severity": "low",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/PLAN.md",
+    "location": "startup\\|resume\\|clear\\|fork",
+    "issue": "`compact` is a valid SessionStart source and is the only one the matcher omits, with no stated reason. SessionStart fires again after a compaction, so the row's reachability probe and the `session_start` ledger row (which records `cc_effort` and `model`) are refreshed after `/clear`, a resume and a fork, but not after a compaction \u2014 the one transition during which the effort level or model most plausibly changed. `fork` itself is valid and correctly included.",
+    "evidence": "cc_hooks.md:310: \"| `SessionStart` | how the session started | `startup`, `resume`, `clear`, `compact`, `fork` |\". cc_hooks.md:583: \"**Later in a running session**: after `/clear` or a compaction, `SessionStart` fires again with the servers already available\". cc_hooks.md:1039 confirms `fork`: \"`SessionStart` hooks run again on resume with `source` set to `\\\"resume\\\"`, or `\\\"fork\\\"` if you added `--fork-session`\". PLAN.md:136 matcher: `startup|resume|clear|fork`.",
+    "fix": "Change the SessionStart matcher to `startup|resume|clear|compact|fork`, or add a sentence to PLAN.md:136 stating that `compact` is excluded deliberately and why the session_start row need not be refreshed after a compaction."
+   },
+   {
+    "id": "VF-10",
+    "severity": "low",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/VERIFIED_FACTS.md",
+    "location": "B4",
+    "issue": "\"`${user_config.KEY}` substitution happens only in exec-form hook commands\" is too narrow. Substitution also works in MCP and LSP server configs, and non-sensitive values also substitute into skill and agent content. What is exec-form-only is the *hook command* case; the general rule is that fields which run through a shell reject the placeholder.",
+    "evidence": "VERIFIED_FACTS.md B4: \"`${user_config.KEY}` substitution happens only in exec-form hook commands\". cc_plugins_ref.md:618: \"Each value is available for substitution as `${user_config.KEY}` in MCP and LSP server configs and hook commands. Non-sensitive values can also be substituted in skill and agent content.\" cc_plugins_ref.md:620: \"Fields that run in a shell reject `${user_config.*}`\". (Also cc_plugins_ref.md:337: monitor commands reject it and monitor processes receive no `CLAUDE_PLUGIN_OPTION_<KEY>` at all.)",
+    "fix": "Replace with: \"`${user_config.KEY}` substitutes in MCP and LSP server configs, exec-form hook commands, and (non-sensitive values only) skill and agent content; every field that runs through a shell rejects it. Monitor commands reject it and monitor processes receive no `CLAUDE_PLUGIN_OPTION_<KEY>` either.\""
+   },
+   {
+    "id": "VF-11",
+    "severity": "low",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/VERIFIED_FACTS.md",
+    "location": "C8",
+    "issue": "Level [V] is overstated for the \"2 retries\" default. The TypeSafe Python SDK docs state the timeout default (10.0) but never state a default for `RetryPolicy.max_retries`; the only documented \"Default: 2\" is `maxRetries` on the **JavaScript** SDK's RetryPolicy. The Python 3.10+ and 10 s timeout parts of the row are correctly sourced.",
+    "evidence": "VERIFIED_FACTS.md C8: \"Default timeout 10 s, 2 retries.\" Sourced: typesafe_llms_full.txt:18490 \"DEFAULT_TIMEOUT = 10.0\" and :12621 \"**Install the SDK** (requires Python >= 3.10)\". Unsourced: the Python RetryPolicy page (typesafe_llms_full.txt:18668-18760) documents `max_retries` as \"Maximum retries after the initial attempt; `0` disables retries\" with no default value; the only \"Default: 2\" in the corpus is typesafe_llms_full.txt:17064, inside the JavaScript SDK reference (`readonly maxRetries: number`).",
+    "fix": "Change the sentence to \"Default timeout 10 s (`DEFAULT_TIMEOUT = 10.0`). The Python docs do not publish a `RetryPolicy.max_retries` default; the JavaScript SDK documents 2. Read the installed package's default before relying on it.\" and drop the row's level to [R] for that clause or split the retry claim into its own unverified line."
+   },
+   {
+    "id": "VF-12",
+    "severity": "low",
+    "file": "/Users/ronitkatikaneni/Projects/VERDICT/docs/PLAN.md",
+    "location": "so no site-packages can load",
+    "issue": "The isolation claim is correct as far as it goes but incomplete in a way that matters for the section 8 import ban: `-S -E` removes site-packages and PYTHON* environment influence, but the script's own directory is still `sys.path[0]`. Any file dropped next to the hook entry point shadows a stdlib module of the same name, so `-S -E` alone does not guarantee a stdlib-only import graph.",
+    "evidence": "PLAN.md:147: \"`exec`s the interpreter with `-S -E` so no site-packages can load\". Tested in the scratchpad: `python3 -S -E /\u2026/sp_test/probe.py` run from `/tmp` printed `PATH: '/\u2026/sp_test'` as the first entry, followed only by the framework zip, stdlib and lib-dynload, and successfully executed `import evil` resolving to `/\u2026/sp_test/evil.py`. So a `json.py` beside `run.py` in `plugin/hooks/` would win over the stdlib `json`.",
+    "fix": "Extend PLAN.md:147 to: \"\u2026`-S -E` so no site-packages and no PYTHON* environment variable can influence the import path. Note `sys.path[0]` is still the script's own directory, so the section 8 import-ban check must also assert that no file under `plugin/hooks/` shares a name with a stdlib module.\""
+   }
+  ]
+ }
+}
