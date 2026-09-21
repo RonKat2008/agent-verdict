@@ -68,7 +68,11 @@ def test_redact_never_raises_on_malformed_bytes_text() -> None:
 @settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow])
 def test_redact_never_raises_and_output_is_bounded(text: str) -> None:
     cleaned, hits = redact.redact(text)
-    assert len(cleaned) <= len(text) + 40 * hits
+    if hits == -1:
+        # Explicit-failure path (fix round 1, item 3): never raw input.
+        assert cleaned == "[redaction failed]"
+    else:
+        assert len(cleaned) <= len(text) + 40 * hits
 
 
 @pytest.mark.slow

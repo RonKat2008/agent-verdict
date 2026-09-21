@@ -10,13 +10,20 @@ Translation notes (task-2-brief.md):
 - Go RE2's leading `(?i)` becomes a Python scoped-flag group `(?i:...)`.
   Python 3.11 rejects a *global* inline flag anywhere but the start of the
   pattern (3.9 only warns), so any `(?i)` after position 0 is rewritten the
-  same way, scoped from that point to the end of the pattern rather than to
-  its true RE2 enclosing group -- a deliberate over-approximation (documented
-  in task-2-report.md) that only affects a handful of rules outside the
-  families this task's corpus and local rules target.
+  same way, scoped to its true RE2 enclosing group (`_enclosing_group_end`),
+  or to the end of the pattern when it is at the top level. Fix round 1
+  found that an earlier version of this always scoped to "end of pattern",
+  which mis-balanced parens and silently broke sibling alternatives after
+  the flag (`curl-auth-header`'s single-quote branch stopped matching).
 - `\\z` (RE2/PCRE "absolute end") becomes `\\Z` (Python's "absolute end";
   Python has no separate "before trailing newline" form).
 - The one POSIX class in the vendored file (`[:alnum:]`) is expanded inline.
+- The vendored trailing-delimiter construct `_TRAILING_DELIM_OLD` (152
+  occurrences) requires the secret be immediately followed by one of a
+  narrow set of characters, so `sk_live_XXXX)` or `sk_live_XXXX,` fail to
+  match at all (fix round 1, item 5). It is widened to also accept
+  `) ] } , . : > <` and rewritten as a lookahead `(?=...)` so the delimiter
+  is asserted but never consumed or redacted.
 - Every translated pattern is compile-checked under Python 3.9 `re` semantics
   by shelling out to /usr/bin/python3 (falling back to compiling locally with
   the current interpreter if that binary is missing). Rules that still fail
@@ -42,6 +49,9 @@ CORPUS_PATH = ROOT / "tests" / "fixtures" / "secrets_corpus.jsonl"
 SYSTEM_PYTHON39 = Path("/usr/bin/python3")
 MIN_COMPILED = 150
 
+_TRAILING_DELIM_OLD = r"""(?:[\x60'"\s;]|\\[nr]|$)"""
+_TRAILING_DELIM_NEW = r"""(?=[\x60'"\s;)\]},.:><&]|\\[nr]|$)"""
+
 _POSIX_CLASSES = {
     "[:alnum:]": "A-Za-z0-9",
     "[:alpha:]": "A-Za-z",
@@ -53,8 +63,18 @@ _POSIX_CLASSES = {
     "[:punct:]": "!-/:-@\\[-`{-~",
 }
 
-# Three local rules not present in gitleaks (task-2-brief.md). Each tuple
-# entry mirrors the RULES shape below (id, pattern, keywords, entropy, group).
+# Local rules not present in gitleaks (task-2-brief.md, fix-round-1 items
+# 1/2/6/7). Each tuple entry mirrors the RULES shape below (id, pattern,
+# keywords, entropy, group). Fix round 1 removed the sha*/base64-prefix
+# lookbehinds that used to guard `local-high-entropy` -- they exactly
+# mirrored this repo's own negative-corpus generators (a held-out probe set
+# with different lockfile/hash formats proved them worthless) -- and
+# replaced them with structural checks applied at match time in redact.py
+# (`_passes_local_filters`): standard hex-digest lengths, required mixed
+# character classes, dictionary-word-like values, obvious placeholders, and
+# a nearby hash/digest/asset vocabulary check. `local-high-entropy` is split
+# into an alnum-only and a base64-with-padding variant so each can carry its
+# own (independently raised) entropy floor.
 LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None, int], ...] = (
     (
         "local-env-secret",
@@ -65,12 +85,35 @@ LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None, int], ...] = (
         1,
     ),
     (
-        "local-high-entropy",
-        r"(?<!sha1-)(?<!sha256-)(?<!sha384-)(?<!sha512-)(?<!sha1:)(?<!sha256:)(?<!sha384:)"
-        r"(?<!sha512:)(?<!base64,)(?<!base64:)(?<![A-Za-z0-9+/=])"
-        r"([A-Za-z0-9]{40,}|[A-Za-z0-9+/]{40,}={1,2})",
+        "local-password-assignment",
+        r"(?im)\bpassword\b\s*[:=]?\s+(\S{6,})",
+        ("password",),
+        None,
+        1,
+    ),
+    (
+        "local-high-entropy-alnum",
+        # Excludes a run immediately touching "+" or "/" on either side, not
+        # just other alnum chars: without that, a 40+ char alnum *substring*
+        # inside a larger base64 blob (which uses "+"/"/") matches on its own
+        # -- at a start position with no "base64,"/"sha256-"-style vocabulary
+        # immediately before it -- silently bypassing the context check that
+        # correctly excludes the base64 rule's own (whole-blob) match.
+        r"(?<![A-Za-z0-9+/])([A-Za-z0-9]{40,})(?![A-Za-z0-9+/])",
         (),
-        4.0,
+        4.3,
+        1,
+    ),
+    (
+        "local-high-entropy-b64",
+        # No trailing "=" in the lookbehind exclusion set (unlike the alnum
+        # variant): "=" is the single most common assignment separator
+        # (`KEY=<value>`), so excluding it would block matching a base64
+        # value immediately after one -- found via the required env-dump
+        # bare-context test (fix round 1).
+        r"(?<![A-Za-z0-9+/])([A-Za-z0-9+/]{40,}={1,2})",
+        (),
+        4.8,
         1,
     ),
     (
@@ -79,6 +122,27 @@ LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None, int], ...] = (
         ("://",),
         None,
         1,
+    ),
+    (
+        "local-openrouter",
+        r"\bsk-or-v1-[a-f0-9]{64}\b",
+        ("sk-or-v1-",),
+        None,
+        0,
+    ),
+    (
+        "local-openai-project-key",
+        r"\bsk-proj-[A-Za-z0-9_-]{20,200}\b",
+        ("sk-proj-",),
+        None,
+        0,
+    ),
+    (
+        "local-twilio-account-sid",
+        r"\bAC[0-9a-fA-F]{32}\b",
+        ("ac",),
+        None,
+        0,
     ),
 )
 
@@ -89,21 +153,65 @@ def _expand_posix_classes(pattern: str) -> str:
     return pattern
 
 
+_MAX_INLINE_FLAG_PASSES = 50
+
+
+def _sibling_boundary(pattern: str, start: int) -> int:
+    """Index of the first `|` or `)` at depth 0 relative to `start`.
+
+    Returns `len(pattern)` if neither is found first. Ignores parens/pipes
+    inside character classes and escaped characters.
+
+    A bare `(?i)` scopes to "the rest of its current alternative", not to
+    its enclosing group's own close paren: gitleaks rules routinely put a
+    separate `(?i)` in *each* branch of a `(...|...)` alternation (e.g.
+    `curl-auth-header`'s double- and single-quote branches), and scoping the
+    first one all the way to the enclosing group's close paren swallows the
+    literal `|'...'` that starts the next branch into the flag's own
+    "content" -- which then requires that branch's leading quote character
+    to appear inside what was supposed to be an alternative, breaking the
+    match entirely (fix round 1, item 4 fallout, found via the required
+    curl Basic-auth test).
+    """
+    depth, i, n, in_class = 0, start, len(pattern), False
+    while i < n:
+        c = pattern[i]
+        if c == "\\":
+            i += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+            i += 1
+            continue
+        if c == "[":
+            in_class = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            if depth == 0:
+                return i
+            depth -= 1
+        elif c == "|" and depth == 0:
+            return i
+        i += 1
+    return n
+
+
 def _translate_inline_flags(pattern: str) -> str:
-    """Rewrite bare `(?i)` into a scoped `(?i:...)` group (module docstring)."""
-    if pattern.startswith("(?i)"):
-        rest = pattern[4:].replace("(?i)", "")
-        return "(?i:" + rest + ")"
-    idx = pattern.find("(?i)")
-    if idx == -1:
-        return pattern
-    before, after = pattern[:idx], pattern[idx + 4 :]
-    return before + "(?i:" + after.replace("(?i)", "") + ")"
+    """Rewrite each bare `(?i)` into a scoped `(?i:...)` group (module docstring)."""
+    for _ in range(_MAX_INLINE_FLAG_PASSES):
+        idx = pattern.find("(?i)")
+        if idx == -1:
+            break
+        close = _sibling_boundary(pattern, idx + 4)
+        pattern = pattern[:idx] + "(?i:" + pattern[idx + 4 : close] + ")" + pattern[close:]
+    return pattern
 
 
 def translate_regex(pattern: str) -> str:
     pattern = _expand_posix_classes(pattern)
     pattern = pattern.replace(r"\z", r"\Z")
+    pattern = pattern.replace(_TRAILING_DELIM_OLD, _TRAILING_DELIM_NEW)
     pattern = _translate_inline_flags(pattern)
     return pattern
 

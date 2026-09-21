@@ -1,11 +1,23 @@
-"""Seeded generator for tests/fixtures/secrets_corpus.jsonl (task-2-brief.md).
+"""Seeded generator for tests/fixtures/secrets_corpus.jsonl (task-2-brief.md,
+fix round 1).
 
 Every positive secret is synthetic and format-valid for its family, embedded
-in a realistic tool-output context (env dump, curl command, stack trace, JSON
-config, git remote, build log). Every negative is a realistic non-secret that
-resembles a secret superficially (git SHA, UUID, lockfile integrity hash,
-base64 image fragment, long file path, hex color, ordinary prose). Nothing
-here reads real credentials from this machine; nothing is a real secret.
+in one of twelve realistic tool-output contexts -- four LABELED (the secret
+sits right after a KEY/TOKEN/SECRET-shaped name: env dump, `export`, a JSON
+config with a real key name, a curl header) and eight BARE (no adjacent key
+name at all: a log line, a traceback, a prose sentence, a JSON value under a
+neutral key, a URL query parameter, a quoted string in code, the secret
+followed by end-of-sentence punctuation, a git remote URL). Fix round 1: an
+independent reviewer found the first corpus put every secret after a label,
+so structured families (AWS, GitHub, Slack, ...) were "detected" only by the
+generic keyword-based fallback rules, never by their own dedicated rule.
+Every family now cycles through all twelve contexts (>=4 types, >=50% bare,
+satisfied by construction, not by chance), and each row records which
+context produced it so the gate test can report bare-context recall
+per family.
+
+Hard negatives live in `gen_corpus_negatives.py`. Nothing here is a real
+secret; nothing is read from this machine.
 
 Deterministic: same `SEED` always produces the same corpus (`random.Random`
 instance threaded through every helper, never the module-level `random`).
@@ -16,18 +28,42 @@ from __future__ import annotations
 import base64
 import json
 import random
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gen_corpus_negatives import NEGATIVE_CATEGORIES  # noqa: E402
+
 SEED = 20260921
-POSITIVES_PER_FAMILY = 14
-NEGATIVES_PER_CATEGORY = 29
+POSITIVES_PER_FAMILY = 16
+NEGATIVES_PER_CATEGORY = 12
 
 _ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 _HEX_LOWER = "0123456789abcdef"
 _BASE32_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 _B64URL = _ALNUM + "-_"
 _B64 = _ALNUM + "+/"
+
+# The 15 "structured" families the gate test holds to a bare-context,
+# non-generic-rule recall bar (task-2-brief.md fix round 1, item 1).
+STRUCTURED_FAMILIES: tuple[str, ...] = (
+    "aws",
+    "github",
+    "slack",
+    "stripe",
+    "openai",
+    "anthropic",
+    "openrouter",
+    "google-api",
+    "jwt",
+    "private-key",
+    "npm",
+    "pypi",
+    "huggingface",
+    "sendgrid",
+    "twilio",
+)
 
 
 def _rand_chars(rng: random.Random, alphabet: str, n: int) -> str:
@@ -79,6 +115,7 @@ def _google_api(rng: random.Random) -> str:
 
 
 def _b64url_json(rng: random.Random, obj: dict[str, object]) -> str:
+    del rng
     raw = json.dumps(obj, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
@@ -108,6 +145,19 @@ def _pypi(rng: random.Random) -> str:
     return "pypi-AgEIcHlwaS5vcmc" + _rand_chars(rng, _ALNUM + "-_", 60)
 
 
+def _huggingface(rng: random.Random) -> str:
+    return "hf_" + _rand_chars(rng, "abcdefghijklmnopqrstuvwxyz", 34)
+
+
+def _sendgrid(rng: random.Random) -> str:
+    return "SG." + _rand_chars(rng, _ALNUM + "-_.", 66)
+
+
+def _twilio(rng: random.Random) -> str:
+    prefix = rng.choice(["SK", "AC"])
+    return prefix + _rand_chars(rng, "0123456789abcdef", 32)
+
+
 def _database_url(rng: random.Random) -> str:
     user = "appuser"
     password_alphabet = _ALNUM + "."
@@ -117,7 +167,11 @@ def _database_url(rng: random.Random) -> str:
 
 
 def _env_generic(rng: random.Random) -> str:
-    return _rand_chars(rng, _ALNUM, 28)
+    # 44 chars (not 28): long enough that a bare context (no adjacent KEY=
+    # label) still gets caught by local-high-entropy-alnum, which requires
+    # 40+ chars -- a real generic app secret is typically this long or
+    # longer, so this is a realism fix, not a rule-shaped one.
+    return _rand_chars(rng, _ALNUM, 44)
 
 
 def _generic_high_entropy(rng: random.Random) -> str:
@@ -137,14 +191,39 @@ _FAMILY_SECRET: dict[str, Callable[[random.Random], str]] = {
     "private-key": _private_key,
     "npm": _npm,
     "pypi": _pypi,
+    "huggingface": _huggingface,
+    "sendgrid": _sendgrid,
+    "twilio": _twilio,
     "database-url": _database_url,
     "env-assignment": _env_generic,
     "generic-high-entropy": _generic_high_entropy,
 }
 
+# A realistic KEY name per family, used only by the four LABELED contexts.
+_LABEL_KEY: dict[str, str] = {
+    "aws": "AWS_ACCESS_KEY_ID",
+    "github": "GITHUB_TOKEN",
+    "slack": "SLACK_BOT_TOKEN",
+    "stripe": "STRIPE_SECRET_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "google-api": "GOOGLE_API_KEY",
+    "jwt": "access_token",
+    "private-key": "private_key",
+    "npm": "NPM_TOKEN",
+    "pypi": "PYPI_TOKEN",
+    "huggingface": "HF_TOKEN",
+    "sendgrid": "SENDGRID_API_KEY",
+    "twilio": "TWILIO_AUTH_TOKEN",
+    "database-url": "DATABASE_URL",
+    "env-assignment": "DEPLOY_SECRET",
+    "generic-high-entropy": "X-Deploy-Signature",
+}
+
+
 # --------------------------------------------------------------------------
-# Realistic wrapping contexts. Each takes (rng, secret) and returns text with
-# the secret embedded once, verbatim.
+# LABELED contexts: the secret sits right after a KEY/TOKEN-shaped name.
 # --------------------------------------------------------------------------
 
 
@@ -161,21 +240,11 @@ def _ctx_env_dump(rng: random.Random, key: str, secret: str) -> str:
 
 
 def _ctx_export_dump(rng: random.Random, key: str, secret: str) -> str:
+    del rng
     return f"export {key}={secret}\nexport NODE_ENV=production\n"
 
 
-def _ctx_curl(rng: random.Random, key: str, secret: str) -> str:
-    url = rng.choice(
-        [
-            "https://api.example.com/v1/deploy",
-            "https://openrouter.ai/api/v1/chat/completions",
-            "https://internal.example.net/hooks/trigger",
-        ]
-    )
-    return f'curl -X POST "{url}" -H "{key}: {secret}" -d \'{{"ok": true}}\''
-
-
-def _ctx_json_config(rng: random.Random, key: str, secret: str) -> str:
+def _ctx_json_labeled(rng: random.Random, key: str, secret: str) -> str:
     obj = {
         "service": rng.choice(["billing", "auth", "notifications"]),
         key: secret,
@@ -184,17 +253,86 @@ def _ctx_json_config(rng: random.Random, key: str, secret: str) -> str:
     return json.dumps(obj, indent=2)
 
 
-def _ctx_stack_trace(rng: random.Random, key: str, secret: str) -> str:
+def _ctx_curl_header(rng: random.Random, key: str, secret: str) -> str:
+    url = rng.choice(
+        [
+            "https://api.example.com/v1/deploy",
+            "https://openrouter.ai/api/v1/chat/completions",
+            "https://internal.example.net/hooks/trigger",
+        ]
+    )
+    header = key if key.lower() in ("authorization",) else f"X-{key}"
+    return f'curl -X POST "{url}" -H "{header}: {secret}" -d \'{{"ok": true}}\''
+
+
+# --------------------------------------------------------------------------
+# BARE contexts: no adjacent key/token/secret/password/credential label.
+# --------------------------------------------------------------------------
+
+
+def _ctx_bare_log_line(rng: random.Random, key: str, secret: str) -> str:
+    del key
     return (
-        "Traceback (most recent call last):\n"
-        f'  File "app/config.py", line {rng.randint(10, 400)}, in load_config\n'
-        f"    raise RuntimeError(f'failed with {key}={secret}')\n"
-        "RuntimeError: configuration error"
+        f"[{rng.randint(0, 23):02d}:{rng.randint(0, 59):02d}:{rng.randint(0, 59):02d}] "
+        f"upstream responded with body: {secret}"
     )
 
 
-def _ctx_git_remote(rng: random.Random, key: str, secret: str) -> str:
+def _ctx_bare_traceback(rng: random.Random, key: str, secret: str) -> str:
     del key
+    return (
+        "Traceback (most recent call last):\n"
+        f'  File "app/client.py", line {rng.randint(10, 400)}, in send\n'
+        f"    raise ConnectionError(f'upstream rejected {{{secret!r}}}')\n"
+        "ConnectionError: upstream rejected"
+    )
+
+
+def _ctx_bare_prose(rng: random.Random, key: str, secret: str) -> str:
+    del key
+    templates = [
+        f"The rotated value was {secret} according to the audit log.",
+        f"Support confirmed the value {secret} still worked after the migration.",
+        f"During the incident review, {secret} showed up in three separate logs.",
+    ]
+    return rng.choice(templates)
+
+
+def _ctx_json_neutral(rng: random.Random, key: str, secret: str) -> str:
+    del key
+    neutral_key = rng.choice(["value", "data"])
+    return json.dumps({neutral_key: secret, "id": rng.randint(1, 9999)}, indent=2)
+
+
+def _ctx_url_query_param(rng: random.Random, key: str, secret: str) -> str:
+    del key
+    param = rng.choice(["code", "state", "ref"])
+    return f"GET /callback?{param}={secret}&redirect_uri=https%3A%2F%2Fapp.example.com"
+
+
+def _ctx_quoted_code_string(rng: random.Random, key: str, secret: str) -> str:
+    del key
+    var = rng.choice(["cfg", "opts", "payload"])
+    return f'const {var} = ["{secret}", "fallback"];'
+
+
+def _ctx_end_of_sentence(rng: random.Random, key: str, secret: str) -> str:
+    del key
+    punct = rng.choice([")", ",", "]", '"', "'", ";", "."])
+    wrappers = {
+        ")": f"(retry with {secret})",
+        ",": f"Args: {secret}, timeout=30",
+        "]": f"[{secret}]",
+        '"': f'Copy exactly: "{secret}"',
+        "'": f"Copy exactly: '{secret}'",
+        ";": f"{secret};",
+        ".": f"Ends here: {secret}.",
+    }
+    return wrappers[punct]
+
+
+def _ctx_git_remote_bare(rng: random.Random, key: str, secret: str) -> str:
+    del key, rng
     return (
         "$ git remote -v\n"
         f"origin  https://{secret}:x-oauth-basic@github.com/acme/widgets.git (fetch)\n"
@@ -202,151 +340,54 @@ def _ctx_git_remote(rng: random.Random, key: str, secret: str) -> str:
     )
 
 
-def _ctx_build_log(rng: random.Random, key: str, secret: str) -> str:
-    return (
-        f"[{rng.randint(0, 59):02d}:{rng.randint(0, 59):02d}] Deploying build "
-        f"#{rng.randint(100, 9999)}...\n"
-        f"{key}: {secret}\n"
-        "[build] done in 12.4s"
-    )
+_CONTEXTS: tuple[tuple[str, bool, Callable[[random.Random, str, str], str]], ...] = (
+    ("env_dump", False, _ctx_env_dump),
+    ("export_dump", False, _ctx_export_dump),
+    ("json_labeled", False, _ctx_json_labeled),
+    ("curl_header", False, _ctx_curl_header),
+    ("bare_log_line", True, _ctx_bare_log_line),
+    ("bare_traceback", True, _ctx_bare_traceback),
+    ("bare_prose", True, _ctx_bare_prose),
+    ("json_neutral", True, _ctx_json_neutral),
+    ("url_query_param", True, _ctx_url_query_param),
+    ("quoted_code_string", True, _ctx_quoted_code_string),
+    ("end_of_sentence", True, _ctx_end_of_sentence),
+    ("git_remote_bare", True, _ctx_git_remote_bare),
+)
 
 
-def _ctx_file_dump(rng: random.Random, key: str, secret: str) -> str:
-    del key
-    return f"$ cat ~/.ssh/id_rsa\n{secret}\n"
-
-
-_FAMILY_CONTEXTS: dict[str, list[tuple[str, Callable[[random.Random, str, str], str]]]] = {
-    "aws": [("AWS_SECRET_ACCESS_KEY", _ctx_env_dump), ("AWS_ACCESS_KEY_ID", _ctx_export_dump)],
-    "github": [("GITHUB_TOKEN", _ctx_env_dump), ("token", _ctx_git_remote)],
-    "slack": [("SLACK_BOT_TOKEN", _ctx_env_dump), ("Authorization", _ctx_curl)],
-    "stripe": [("STRIPE_SECRET_KEY", _ctx_env_dump), ("stripe_key", _ctx_json_config)],
-    "openai": [("OPENAI_API_KEY", _ctx_env_dump), ("api_key", _ctx_json_config)],
-    "anthropic": [("ANTHROPIC_API_KEY", _ctx_export_dump), ("api_key", _ctx_json_config)],
-    "openrouter": [("OPENROUTER_API_KEY", _ctx_env_dump), ("Authorization", _ctx_curl)],
-    "google-api": [("apiKey", _ctx_json_config), ("GOOGLE_API_KEY", _ctx_env_dump)],
-    "jwt": [("token", _ctx_json_config), ("access_token", _ctx_build_log)],
-    "private-key": [("key", _ctx_file_dump), ("private_key", _ctx_stack_trace)],
-    "npm": [("//registry.npmjs.org/:_authToken", _ctx_env_dump), ("NPM_TOKEN", _ctx_export_dump)],
-    "pypi": [("TWINE_PASSWORD", _ctx_env_dump), ("PYPI_TOKEN", _ctx_export_dump)],
-    "database-url": [("DATABASE_URL", _ctx_env_dump), ("db_url", _ctx_json_config)],
-    "env-assignment": [
-        ("DEPLOY_SECRET", _ctx_env_dump),
-        ("APP_CREDENTIAL_TOKEN", _ctx_export_dump),
-    ],
-    "generic-high-entropy": [
-        ("X-Deploy-Signature", _ctx_build_log),
-        ("Backup-Encryption-Digest", _ctx_curl),
-    ],
-}
-
-
-def _make_positive(rng: random.Random, family: str) -> dict[str, object]:
+def _make_positive(rng: random.Random, family: str, context_index: int) -> dict[str, object]:
     secret = _FAMILY_SECRET[family](rng)
-    key, ctx_fn = rng.choice(_FAMILY_CONTEXTS[family])
+    context_name, is_bare, ctx_fn = _CONTEXTS[context_index % len(_CONTEXTS)]
+    key = _LABEL_KEY[family]
     text = ctx_fn(rng, key, secret)
-    return {"text": text, "secret": secret, "family": family}
-
-
-# --------------------------------------------------------------------------
-# Hard negatives: realistic non-secrets that superficially resemble secrets.
-# --------------------------------------------------------------------------
-
-
-def _neg_git_sha(rng: random.Random) -> str:
-    sha = _rand_chars(rng, _HEX_LOWER, 40)
-    return f"commit {sha}\nAuthor: dev <dev@example.com>\n\n    fix: tighten validation"
-
-
-def _neg_uuid(rng: random.Random) -> str:
-    hexs = _rand_chars(rng, _HEX_LOWER, 32)
-    uuid = f"{hexs[0:8]}-{hexs[8:12]}-{hexs[12:16]}-{hexs[16:20]}-{hexs[20:32]}"
-    return f'{{"request_id": "{uuid}", "status": "ok"}}'
-
-
-def _neg_lockfile_hash(rng: random.Random) -> str:
-    algo = rng.choice(["sha512", "sha256", "sha1"])
-    body = _rand_chars(rng, _B64, rng.choice([28, 44, 88]))
-    pkg = rng.choice(["lodash", "react", "chalk", "typescript"])
-    return (
-        f'  "{pkg}": {{\n'
-        f'    "version": "1.{rng.randint(0, 9)}.{rng.randint(0, 20)}",\n'
-        f'    "resolved": "https://registry.npmjs.org/{pkg}/-/{pkg}-1.0.0.tgz",\n'
-        f'    "integrity": "{algo}-{body}=="\n'
-        "  }"
-    )
-
-
-def _neg_base64_image(rng: random.Random) -> str:
-    body = _rand_chars(rng, _B64, rng.randint(60, 140))
-    kind = rng.choice(["png", "jpeg", "gif"])
-    return f'<img src="data:image/{kind};base64,{body}==" alt="logo" />'
-
-
-def _neg_file_path(rng: random.Random) -> str:
-    segments = rng.sample(
-        [
-            "components",
-            "hooks",
-            "verdict",
-            "hot",
-            "utils",
-            "internal",
-            "nested",
-            "deeply",
-            "module",
-            "core",
-            "shared",
-            "vendor",
-        ],
-        k=rng.randint(4, 7),
-    )
-    path = "/Users/dev/Projects/app/src/" + "/".join(segments) + "/index.ts"
-    return f"Compiling {path} ... 240 modules transformed."
-
-
-def _neg_hex_color(rng: random.Random) -> str:
-    color = _rand_chars(rng, _HEX_LOWER, rng.choice([3, 6]))
-    return f"--color-accent: #{color}; /* brand accent */"
-
-
-def _neg_prose(rng: random.Random) -> str:
-    sentences = [
-        "The build completed without warnings.",
-        "All 42 tests passed in 3.2 seconds.",
-        "Refactored the pagination helper for clarity.",
-        "No lint errors were found in the changed files.",
-        "The deployment finished and health checks are green.",
-        "Reviewed the pull request and left two comments.",
-        "Cache was warm, so the request completed quickly.",
-        "The scheduled job ran successfully at midnight.",
-    ]
-    return " ".join(rng.sample(sentences, k=rng.randint(2, 4)))
-
-
-_NEGATIVE_CATEGORIES: dict[str, Callable[[random.Random], str]] = {
-    "git-sha": _neg_git_sha,
-    "uuid": _neg_uuid,
-    "lockfile-hash": _neg_lockfile_hash,
-    "base64-image": _neg_base64_image,
-    "file-path": _neg_file_path,
-    "hex-color": _neg_hex_color,
-    "prose": _neg_prose,
-}
+    return {
+        "text": text,
+        "secret": secret,
+        "family": family,
+        "context": context_name,
+        "bare": is_bare,
+    }
 
 
 def _make_negative(rng: random.Random, category: str) -> dict[str, object]:
-    text = _NEGATIVE_CATEGORIES[category](rng)
-    return {"text": text, "secret": None, "family": category}
+    text = NEGATIVE_CATEGORIES[category](rng)
+    return {"text": text, "secret": None, "family": category, "context": category, "bare": True}
 
 
 def build_corpus() -> list[dict[str, object]]:
     rng = random.Random(SEED)
     rows: list[dict[str, object]] = []
     for family in sorted(_FAMILY_SECRET):
-        for _ in range(POSITIVES_PER_FAMILY):
-            rows.append(_make_positive(rng, family))
-    for category in sorted(_NEGATIVE_CATEGORIES):
+        # Shuffle the fixed context order per family so identical indices
+        # across families don't all land on the same context type, while
+        # still guaranteeing every family cycles through all twelve types
+        # (>=4 types, >=8/12 bare) within POSITIVES_PER_FAMILY >= 12 rows.
+        order = list(range(len(_CONTEXTS)))
+        rng.shuffle(order)
+        for i in range(POSITIVES_PER_FAMILY):
+            rows.append(_make_positive(rng, family, order[i % len(order)]))
+    for category in sorted(NEGATIVE_CATEGORIES):
         for _ in range(NEGATIVES_PER_CATEGORY):
             rows.append(_make_negative(rng, category))
     rng.shuffle(rows)
