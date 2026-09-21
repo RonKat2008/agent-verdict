@@ -34,9 +34,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gen_corpus_negatives import (  # noqa: E402
+    EVIDENCE_TEXT,
     NEGATIVE_CATEGORIES,
     NEGATIVE_COUNT_OVERRIDES,
-    OPAQUE_BLOB_CATEGORIES,
+    neg_class_for_category,
 )
 
 SEED = 20260921
@@ -371,7 +372,7 @@ def _make_positive(rng: random.Random, family: str, context_index: int) -> dict[
         "family": family,
         "context": context_name,
         "bare": is_bare,
-        "opaque_blob": False,  # D-026: only negatives can be opaque_blob
+        "neg_class": EVIDENCE_TEXT,  # D-027: only negatives are classified
     }
 
 
@@ -383,9 +384,9 @@ def _make_negative(rng: random.Random, category: str) -> dict[str, object]:
         "family": category,
         "context": category,
         "bare": True,
-        # D-026: set from the CATEGORY, never from whether the redactor
-        # happens to fire on this particular row.
-        "opaque_blob": category in OPAQUE_BLOB_CATEGORIES,
+        # D-027: assigned from the CATEGORY, never from whether the
+        # redactor happens to fire on this particular row.
+        "neg_class": neg_class_for_category(category),
     }
 
 

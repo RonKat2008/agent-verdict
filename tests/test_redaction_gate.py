@@ -1,24 +1,33 @@
-"""Gate G1.7, as redefined by D-026 (docs/DECISIONS.md) in fix round 2.
+"""Gate G1.7, as redefined by D-027 (docs/DECISIONS.md; amends D-026).
 
-Two independent held-out probes showed that unlabeled base64 asset blobs
-(wasm, fonts, source maps, protobuf) are statistically indistinguishable
-from real high-entropy secrets, so no text-only rule separates them. D-026
-splits negatives into TEXT and `opaque_blob` categories -- set by the
-corpus generator from the CATEGORY, never from the redaction outcome (see
-`gen_corpus_negatives.OPAQUE_BLOB_CATEGORIES`) -- and gates each
-differently:
+A third held-out probe passed recall but failed the single "text FPR"
+number: every false hit was a random-looking PUBLIC token (CSP nonce, CSRF
+value, pagination cursor, idempotency key, bcrypt hash, JWKS modulus,
+publishable key) the corpus had no category for. D-027 splits false
+positives by HARM rather than by "is it text": a negative is EVIDENCE TEXT
+if a person could read meaning from the redacted span (prose, errors,
+commands, paths, word-shaped identifiers, placeholders, ordinary env
+lines, secret names, version strings, URLs with slugs, standard-shape
+digests, SSH/PEM public material); it is an OPAQUE TOKEN if it is a
+random-looking string of 20+ chars with no word structure (nonces, CSRF
+values, cursors, idempotency keys, request/trace ids, bcrypt/JWKS
+material, publishable keys, base64 blobs). The class is assigned from the
+CATEGORY by the corpus generator (`gen_corpus_negatives.
+neg_class_for_category`), never from the redaction outcome.
 
-- overall recall >= 0.95 (all positives, all contexts)
-- bare-context, non-generic-rule recall >= 0.90 for the 15 structured
-  families (fix round 1)
-- false-positive rate over TEXT negatives (`opaque_blob == False`) <= 0.02
-- over-redaction rate over `opaque_blob == True` negatives <= 0.30
+Gate:
+- overall recall >= 0.95
+- bare-context, non-generic-rule recall >= 0.90 (structured families)
+- evidence-text false-positive rate <= 0.02
+- opaque-token over-redaction: PRINTED with a per-category table, no
+  assertion beyond printing (redacting a public, meaningless-on-its-own
+  token removes no evidence, so this is reported, not gated)
 
-All four numbers are printed. The corpus
+All four numbers are printed as labeled scalars. The corpus
 (tests/fixtures/secrets_corpus.jsonl, from `python3 scripts/gen_redact.py
 --corpus` / scripts/gen_corpus.py) must never be hand-tuned to make these
-numbers look better than they are, and no existing text category is
-reclassified as a blob to move it out of the stricter bucket.
+numbers look better than they are, and no evidence-text category is
+reclassified as an opaque token to move it out of the stricter bucket.
 """
 
 from __future__ import annotations
@@ -31,13 +40,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin" / "hooks"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from gen_corpus import STRUCTURED_FAMILIES  # noqa: E402
+from gen_corpus_negatives import EVIDENCE_TEXT, OPAQUE_TOKEN  # noqa: E402
 from verdict_hot import redact  # noqa: E402
 
 CORPUS_PATH = Path(__file__).resolve().parent / "fixtures" / "secrets_corpus.jsonl"
 MIN_RECALL = 0.95
 MIN_BARE_NON_GENERIC_RECALL = 0.90
-MAX_TEXT_FPR = 0.02
-MAX_BLOB_OVER_REDACTION = 0.30
+MAX_EVIDENCE_TEXT_FPR = 0.02
 _GENERIC_RULE_IDS = frozenset(
     {"generic-api-key", "local-high-entropy-alnum", "local-high-entropy-b64"}
 )
@@ -53,15 +62,33 @@ def _load_corpus() -> list[dict[str, object]]:
     return rows
 
 
+def _over_redaction(
+    sample: list[dict[str, object]],
+) -> tuple[float, int, Counter[str], Counter[str]]:
+    hit_count = 0
+    cat_total: Counter[str] = Counter()
+    cat_hit: Counter[str] = Counter()
+    for row in sample:
+        text = str(row["text"])
+        family = str(row["family"])
+        _cleaned, hits = redact.redact(text)
+        cat_total[family] += 1
+        if hits > 0:
+            hit_count += 1
+            cat_hit[family] += 1
+    rate = hit_count / len(sample) if sample else float("nan")
+    return rate, hit_count, cat_total, cat_hit
+
+
 def test_redaction_gate_g1_7() -> None:
     rows = _load_corpus()
     positives = [r for r in rows if r["secret"] is not None]
     negatives = [r for r in rows if r["secret"] is None]
-    text_negatives = [r for r in negatives if not r["opaque_blob"]]
-    blob_negatives = [r for r in negatives if r["opaque_blob"]]
+    evidence_negatives = [r for r in negatives if r["neg_class"] == EVIDENCE_TEXT]
+    opaque_negatives = [r for r in negatives if r["neg_class"] == OPAQUE_TOKEN]
     assert len(positives) >= 150, "expected at least 150 positives in the corpus"
-    assert len(text_negatives) >= 150, "expected at least 150 text negatives"
-    assert len(blob_negatives) >= 20, "expected a meaningful opaque_blob sample"
+    assert len(evidence_negatives) >= 150, "expected at least 150 evidence-text negatives"
+    assert len(opaque_negatives) >= 20, "expected a meaningful opaque-token sample"
 
     family_total: Counter[str] = Counter()
     family_hit: Counter[str] = Counter()
@@ -84,43 +111,33 @@ def test_redaction_gate_g1_7() -> None:
                 bare_non_generic_hit[family] += 1
     recall = recalled / len(positives)
 
-    def _over_redaction(
-        sample: list[dict[str, object]],
-    ) -> tuple[float, int, Counter[str], Counter[str]]:
-        hit_count = 0
-        cat_total: Counter[str] = Counter()
-        cat_hit: Counter[str] = Counter()
-        for row in sample:
-            text = str(row["text"])
-            family = str(row["family"])
-            _cleaned, hits = redact.redact(text)
-            cat_total[family] += 1
-            if hits > 0:
-                hit_count += 1
-                cat_hit[family] += 1
-        rate = hit_count / len(sample) if sample else float("nan")
-        return rate, hit_count, cat_total, cat_hit
-
-    text_fpr, text_fp_count, text_cat_total, text_cat_fp = _over_redaction(text_negatives)
-    blob_rate, blob_hit_count, blob_cat_total, blob_cat_hit = _over_redaction(blob_negatives)
+    evidence_fpr, evidence_fp_count, evidence_cat_total, evidence_cat_fp = _over_redaction(
+        evidence_negatives
+    )
+    opaque_rate, opaque_hit_count, opaque_cat_total, opaque_cat_hit = _over_redaction(
+        opaque_negatives
+    )
 
     print(f"G1.7 recall={recall:.4f} ({recalled}/{len(positives)})")
-    print(f"G1.7 text_fpr={text_fpr:.4f} ({text_fp_count}/{len(text_negatives)})")
-    print(f"G1.7 blob_over_redaction={blob_rate:.4f} ({blob_hit_count}/{len(blob_negatives)})")
+    print(
+        f"G1.7 evidence_text_fpr={evidence_fpr:.4f} ({evidence_fp_count}/{len(evidence_negatives)})"
+    )
+    n_opaque = len(opaque_negatives)
+    print(f"G1.7 opaque_token_over_redaction={opaque_rate:.4f} ({opaque_hit_count}/{n_opaque})")
     print("per-family recall:")
     for family in sorted(family_total):
         total = family_total[family]
         hit = family_hit[family]
         print(f"  {family}: {hit}/{total} = {hit / total:.3f}")
-    print("per-category negative table (text):")
-    for family in sorted(text_cat_total):
-        total = text_cat_total[family]
-        fp = text_cat_fp[family]
+    print("per-category negative table (evidence_text):")
+    for family in sorted(evidence_cat_total):
+        total = evidence_cat_total[family]
+        fp = evidence_cat_fp[family]
         print(f"  {family}: {fp}/{total} = {fp / total:.3f}")
-    print("per-category negative table (opaque_blob):")
-    for family in sorted(blob_cat_total):
-        total = blob_cat_total[family]
-        fp = blob_cat_hit[family]
+    print("per-category negative table (opaque_token):")
+    for family in sorted(opaque_cat_total):
+        total = opaque_cat_total[family]
+        fp = opaque_cat_hit[family]
         print(f"  {family}: {fp}/{total} = {fp / total:.3f}")
     print("bare-context non-generic recall (structured families):")
     bare_recall_table: dict[str, tuple[int, int]] = {}
@@ -143,15 +160,16 @@ def test_redaction_gate_g1_7() -> None:
     assert not bare_misses, (
         f"bare-context non-generic recall below {MIN_BARE_NON_GENERIC_RECALL} for: {bare_misses}"
     )
-    text_table = {f: (text_cat_fp[f], text_cat_total[f]) for f in sorted(text_cat_total)}
-    assert text_fpr <= MAX_TEXT_FPR, (
-        f"text false-positive rate {text_fpr:.4f} above {MAX_TEXT_FPR}; per-category: {text_table}"
+    evidence_table = {
+        f: (evidence_cat_fp[f], evidence_cat_total[f]) for f in sorted(evidence_cat_total)
+    }
+    assert evidence_fpr <= MAX_EVIDENCE_TEXT_FPR, (
+        f"evidence-text false-positive rate {evidence_fpr:.4f} above {MAX_EVIDENCE_TEXT_FPR}; "
+        f"per-category: {evidence_table}"
     )
-    blob_table = {f: (blob_cat_hit[f], blob_cat_total[f]) for f in sorted(blob_cat_total)}
-    assert blob_rate <= MAX_BLOB_OVER_REDACTION, (
-        f"opaque_blob over-redaction {blob_rate:.4f} above {MAX_BLOB_OVER_REDACTION}; "
-        f"per-category: {blob_table}"
-    )
+    # opaque_token_over_redaction is printed above; D-027 requires reporting
+    # only, no assertion (redacting a meaningless-on-its-own public token
+    # removes no evidence).
 
 
 def test_redact_detail_exposes_firing_rule_ids() -> None:
@@ -176,14 +194,21 @@ def test_bare_context_family_counts_are_nonzero() -> None:
         )
 
 
-def test_opaque_blob_flag_is_set_from_category_not_outcome() -> None:
-    """D-026: `opaque_blob` must be a per-category constant. Every row in a
-    given category has the same flag value (never derived from whether the
+def test_neg_class_is_set_from_category_not_outcome() -> None:
+    """D-027: `neg_class` must be a per-category constant. Every row in a
+    given category has the same class (never derived from whether the
     redactor happened to fire on that particular row)."""
     rows = _load_corpus()
-    by_category: dict[str, set[bool]] = defaultdict(set)
+    by_category: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         if row["secret"] is None:
-            by_category[str(row["family"])].add(bool(row["opaque_blob"]))
-    inconsistent = {cat: flags for cat, flags in by_category.items() if len(flags) != 1}
-    assert not inconsistent, f"opaque_blob varies within a category: {inconsistent}"
+            by_category[str(row["family"])].add(str(row["neg_class"]))
+    inconsistent = {cat: classes for cat, classes in by_category.items() if len(classes) != 1}
+    assert not inconsistent, f"neg_class varies within a category: {inconsistent}"
+
+
+def test_neg_class_values_are_valid() -> None:
+    rows = _load_corpus()
+    for row in rows:
+        if row["secret"] is None:
+            assert row["neg_class"] in (EVIDENCE_TEXT, OPAQUE_TOKEN)

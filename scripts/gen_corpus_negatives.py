@@ -21,6 +21,7 @@ from collections.abc import Callable
 _ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 _HEX_LOWER = "0123456789abcdef"
 _B64 = _ALNUM + "+/"
+_B64URL = _ALNUM + "-_"
 
 
 def _rand_chars(rng: random.Random, alphabet: str, n: int) -> str:
@@ -159,18 +160,138 @@ def _neg_base64_protobuf(rng: random.Random) -> str:
     return f"const RESPONSE_BYTES = '{body}';"
 
 
+def _neg_csp_nonce(rng: random.Random) -> str:
+    """CSP script-src nonce (opaque_token, D-027 item 2): a public,
+    single-use value the browser uses to allow one inline script; not a
+    secret, but random-looking with no word structure."""
+    nonce = _rand_chars(rng, _B64, rng.randint(22, 32))
+    quote = rng.choice(['"', "'"])
+    return f"Content-Security-Policy: script-src {quote}nonce-{nonce}{quote}"
+
+
+def _neg_csrf_hidden_field(rng: random.Random) -> str:
+    """CSRF hidden form field (opaque_token, D-027 item 2): public
+    (delivered to the browser), random-looking, no word structure."""
+    token = _rand_chars(rng, _ALNUM, rng.randint(32, 64))
+    name = rng.choice(["csrf_token", "csrfmiddlewaretoken", "_csrf", "authenticity_token"])
+    return f'<input type="hidden" name="{name}" value="{token}">'
+
+
+def _neg_pagination_cursor(rng: random.Random) -> str:
+    """Opaque pagination cursor in a JSON API response (opaque_token, D-027
+    item 2): random-looking, no word structure, not a secret."""
+    cursor = _rand_chars(rng, _B64URL, rng.randint(28, 48))
+    field = rng.choice(["next_cursor", "cursor", "page_token"])
+    return f'{{"{field}": "{cursor}", "has_more": true}}'
+
+
+def _neg_idempotency_key(rng: random.Random) -> str:
+    """Idempotency-Key request header (opaque_token, D-027 item 2): a
+    client-generated random value, not a secret."""
+    key = f"{_rand_chars(rng, _HEX_LOWER, 8)}-{_rand_chars(rng, _HEX_LOWER, 4)}-" + _rand_chars(
+        rng, _HEX_LOWER, 20
+    )
+    return f"Idempotency-Key: {key}"
+
+
+def _neg_stripe_publishable_key(rng: random.Random) -> str:
+    """Stripe PUBLISHABLE key (opaque_token, D-027 item 2): intentionally
+    public, meant to be embedded client-side -- not a secret."""
+    env = rng.choice(["live", "test"])
+    body = _rand_chars(rng, _ALNUM, 24)
+    return f"STRIPE_PUBLISHABLE_KEY=pk_{env}_{body}"
+
+
+def _neg_jwks_key(rng: random.Random) -> str:
+    """A JWKS public key entry (opaque_token, D-027 item 2): the modulus
+    `n` and key id `kid` are public by definition (that is the point of a
+    JWKS endpoint) even though they are random-looking base64url."""
+    n = _rand_chars(rng, _B64URL, rng.randint(340, 350))
+    kid = _rand_chars(rng, _HEX_LOWER, 32)
+    return f'{{"kty":"RSA","n":"{n}","e":"AQAB","kid":"{kid}","use":"sig"}}'
+
+
+def _neg_password_hash_sql_dump(rng: random.Random) -> str:
+    """A password HASH (bcrypt/argon2) in a SQL dump (opaque_token, D-027
+    item 2): a one-way hash, not the password itself -- the whole point of
+    hashing is that this value grants no access on its own."""
+    algo = rng.choice(["bcrypt", "argon2"])
+    if algo == "bcrypt":
+        prefix = rng.choice(["$2a$", "$2b$", "$2y$"])
+        hashed = prefix + "12$" + _rand_chars(rng, _ALNUM + "./", 53)
+    else:
+        salt = _rand_chars(rng, _B64, 22)
+        digest = _rand_chars(rng, _B64, 43)
+        hashed = f"$argon2id$v=19$m=65536,t=3,p=4${salt}${digest}"
+    email = f"user{rng.randint(1, 999)}@example.com"
+    return f"INSERT INTO users (email, password) VALUES ('{email}', '{hashed}');"
+
+
+def _neg_jupyter_image_output(rng: random.Random) -> str:
+    """A Jupyter notebook cell's rendered PNG output (opaque_token, D-027
+    item 2): compressed binary image data, not a secret."""
+    body = _rand_chars(rng, _B64, rng.randint(80, 160)) + "=="
+    return f'{{"output_type": "display_data", "data": {{"image/png": "{body}"}}}}'
+
+
+def _neg_targz_base64(rng: random.Random) -> str:
+    """A base64-encoded tar.gz artifact (opaque_token, D-027 item 2):
+    compressed binary data, not a secret."""
+    body = _rand_chars(rng, _B64, rng.randint(80, 160)) + "=="
+    return f"ARTIFACT_TARBALL_BASE64={body}"
+
+
+def _neg_request_trace_id(rng: random.Random) -> str:
+    """A request/trace id header (opaque_token, D-027 item 2): random,
+    no word structure, identifies a request for correlation -- not a
+    secret."""
+    header = rng.choice(["X-Request-Id", "X-Trace-Id", "X-Correlation-Id"])
+    value = _rand_chars(rng, _HEX_LOWER, 32)
+    return f"{header}: {value}"
+
+
 # Categories whose over-redaction is reported and bounded separately
 # (D-026) rather than folded into the text false-positive rate. Set from
 # the category, never from whether the redactor happens to fire on a given
 # row -- see gen_corpus.py's `_make_negative`.
-OPAQUE_BLOB_CATEGORIES: frozenset[str] = frozenset(
+EVIDENCE_TEXT = "evidence_text"
+OPAQUE_TOKEN = "opaque_token"
+
+# D-027 (amends D-026): every negative category is classified by HARM, not
+# by outcome. Evidence text is anything a person reads meaning from (prose,
+# errors, commands, paths, word-shaped identifiers, placeholders, ordinary
+# env lines, secret NAMES, version strings, URLs with slugs) -- redacting
+# it damages the ledger's purpose, so it is gated at <=0.02 FPR. An opaque
+# token is a random-looking string of 20+ chars with no word structure
+# (nonces, CSRF values, cursors, idempotency keys, request/trace ids,
+# bcrypt/JWKS material, publishable keys, base64 blobs) -- redacting it
+# removes nothing a verifier or labeler uses, so over-redaction is reported
+# and bounded, not gated to near-zero. Standard-shape digests (git SHAs,
+# sha256/sha512 hex, lockfile integrity, go.sum, docker digests, ETags,
+# UUIDs) and SSH/PEM public material are evidence_text because they MUST
+# survive redaction.
+OPAQUE_TOKEN_CATEGORIES: frozenset[str] = frozenset(
     {
         "base64-asset-labeled",
         "base64-asset-bare",
         "base64-sourcemap",
         "base64-protobuf",
+        "csp-nonce",
+        "csrf-hidden-field",
+        "pagination-cursor",
+        "idempotency-key",
+        "stripe-publishable-key",
+        "jwks-key",
+        "password-hash-sql-dump",
+        "jupyter-image-output",
+        "targz-base64",
+        "request-trace-id",
     }
 )
+
+
+def neg_class_for_category(category: str) -> str:
+    return OPAQUE_TOKEN if category in OPAQUE_TOKEN_CATEGORIES else EVIDENCE_TEXT
 
 
 def _neg_python_traceback_address(rng: random.Random) -> str:
@@ -253,6 +374,25 @@ def _neg_env_placeholder(rng: random.Random) -> str:
         ["changeme", "your-api-key-here", "xxxxxxxx", "<token>", "${VAR}", "replace_me"]
     )
     return f"# .env.example\n{key}={value}"
+
+
+def _neg_toml_yaml_placeholder(rng: random.Random) -> str:
+    """TOML/YAML config with a placeholder value (evidence text, D-027)."""
+    value = rng.choice(
+        ["your-api-key-here", "changeme", "xxxxxxxx", "replace_me", "CHANGE_ME", "example"]
+    )
+    if rng.random() < 0.5:
+        key = rng.choice(["api_key", "token", "password"])
+        return f'{key} = "{value}"'
+    key = rng.choice(["api_key", "token", "password"])
+    return f"{key}: {value}"
+
+
+def _neg_env_example_url_placeholder(rng: random.Random) -> str:
+    """`.env.example` URL with placeholder (not real) credentials (evidence
+    text, D-027): a person reads "user"/"password" as literal placeholders,
+    not as a real secret."""
+    return "# .env.example\nDATABASE_URL=postgres://user:password@localhost:5432/mydb"
 
 
 def _neg_file_path(rng: random.Random) -> str:
@@ -418,6 +558,18 @@ NEGATIVE_CATEGORIES: dict[str, Callable[[random.Random], str]] = {
     "authorized-keys-line": _neg_authorized_keys_line,
     "pem-public-key": _neg_pem_public_key,
     "pem-certificate": _neg_pem_certificate,
+    "toml-yaml-placeholder": _neg_toml_yaml_placeholder,
+    "env-example-url-placeholder": _neg_env_example_url_placeholder,
+    "csp-nonce": _neg_csp_nonce,
+    "csrf-hidden-field": _neg_csrf_hidden_field,
+    "pagination-cursor": _neg_pagination_cursor,
+    "idempotency-key": _neg_idempotency_key,
+    "stripe-publishable-key": _neg_stripe_publishable_key,
+    "jwks-key": _neg_jwks_key,
+    "password-hash-sql-dump": _neg_password_hash_sql_dump,
+    "jupyter-image-output": _neg_jupyter_image_output,
+    "targz-base64": _neg_targz_base64,
+    "request-trace-id": _neg_request_trace_id,
 }
 
 # Per-category negative-row-count overrides (default set by the caller).

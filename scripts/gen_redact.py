@@ -52,6 +52,21 @@ MIN_COMPILED = 150
 _TRAILING_DELIM_OLD = r"""(?:[\x60'"\s;]|\\[nr]|$)"""
 _TRAILING_DELIM_NEW = r"""(?=[\x60'"\s;)\]},.:><&]|\\[nr]|$)"""
 
+# Fix round 3, item 3: gitleaks' "generic keyword + separator + freeform
+# value" template -- 96 vendored rules (adafruit-api-key, hashicorp-tf-
+# password, ...) share this exact literal construct, with the captured
+# group holding ONLY the value after the separator (never the keyword
+# itself). Any rule containing it needs the same placeholder/dictionary-
+# word filtering as `generic-api-key` and `local-env-secret`: a value like
+# "changeme" or "prod-db-credentials" is not a secret regardless of which
+# keyword-shaped rule captured it. Detected structurally (by the pattern
+# text) rather than by hand-enumerating rule ids, so it covers the whole
+# class the coordinator's "for example hashicorp-tf-password" pointed at.
+# Rules with a FIXED prefix baked into the same capturing group (e.g.
+# stripe-access-token's group is the whole "sk_live_..." token) do not use
+# this template and are correctly excluded.
+_ASSIGNMENT_TEMPLATE = r"""[\s'"]{0,3}(?:=|>|:{1,3}=|\|\||:|=>|\?=|,)[\x60'"\s=]{0,5}"""
+
 _POSIX_CLASSES = {
     "[:alnum:]": "A-Za-z0-9",
     "[:alpha:]": "A-Za-z",
@@ -90,17 +105,27 @@ LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None], ...] = (
         "local-password-assignment",
         # Fix round 2, item 3: "a hint about the password prompt." and
         # "password whenever"/"password protected" (ordinary English, no
-        # assignment) must not hit. Three alternatives, each with its own
-        # capturing group (redact.py unions whichever one participates):
-        # (1) an explicit `:`/`=` separator is REQUIRED (not optional
-        #     whitespace, as the first cut had it);
-        # (2) a `.netrc`-style bare `password <value>` line, but only when
+        # assignment) must not hit. Four alternatives, each with its own
+        # capturing group (redact.py unions whichever one participates),
+        # tried in this order (Python alternation is first-match, not
+        # longest-match, so the multi-word branch must come before the
+        # single-word one or it would never get a chance to fire):
+        # (1) fix round 3, item 5: an explicit separator followed by a
+        #     3-to-6-word passphrase ("correct horse battery staple");
+        #     capped at 6 words so it cannot swallow an entire unrelated
+        #     sentence that happens to follow a colon;
+        # (2) an explicit `:`/`=` separator is REQUIRED (not optional
+        #     whitespace, as the first cut had it) for a single-word value;
+        # (3) a `.netrc`-style bare `password <value>` line, but only when
         #     the same line also mentions "machine" or "login";
-        # (3) a line that is JUST "password <value>", where <value>
+        # (4) a line that is JUST "password <value>", where <value>
         #     contains a digit or symbol (excludes "password protected").
         # `_redact_filters.looks_like_plain_english_word` additionally
-        # rejects a lowercase-alphabetic-only value from ANY branch.
-        r"(?im)\bpassword\s*[:=]\s*(\S{6,})"
+        # rejects a lowercase-alphabetic-only value from branches 2-4 (a
+        # multi-word value from branch 1 always contains whitespace, so
+        # that check never applies to it).
+        r"(?im)\bpassword\s*[:=]\s*(\S+(?:\s+\S+){2,5})"
+        r"|\bpassword\s*[:=]\s*(\S{6,})"
         r"|^(?=.*\b(?:machine|login)\b).*?\bpassword\s+(\S{6,})"
         r"|^\s*password\s+(\S*[0-9\W]\S*)\s*$",
         ("password",),
@@ -108,13 +133,17 @@ LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None], ...] = (
     ),
     (
         "local-high-entropy-alnum",
-        # Excludes a run immediately touching "+" or "/" on either side, not
-        # just other alnum chars: without that, a 40+ char alnum *substring*
-        # inside a larger base64 blob (which uses "+"/"/") matches on its own
-        # -- at a start position with no "base64,"/"sha256-"-style vocabulary
-        # immediately before it -- silently bypassing the context check that
-        # correctly excludes the base64 rule's own (whole-blob) match.
-        r"(?<![A-Za-z0-9+/])([A-Za-z0-9]{40,})(?![A-Za-z0-9+/])",
+        # Excludes a run immediately touching "+", "/", "-", or "_" on
+        # either side, not just other alnum chars: without that, a 40+ char
+        # alnum *substring* inside a larger base64/base64url blob (which
+        # uses those four characters) matches on its own -- at a start
+        # position with no "base64,"/"sha256-"-style adjacency cue
+        # immediately before it -- silently bypassing the check that
+        # correctly excludes the whole-blob match. Fix round 3 found the
+        # "-"/"_" gap via a JWKS `"n"` (base64url) value fragmenting at
+        # each "-"/"_" into pieces the `"n":"` cue could not reach past the
+        # first one.
+        r"(?<![A-Za-z0-9+/_-])([A-Za-z0-9]{40,})(?![A-Za-z0-9+/_-])",
         (),
         4.3,
     ),
@@ -129,6 +158,20 @@ LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None], ...] = (
         (),
         4.8,
     ),
+    # Fix round 3 tried a "local-high-entropy-b64url" variant (matching
+    # `[A-Za-z0-9_-]{40,}` as one span, RFC 4648 sec. 5) to stop a JWKS "n"
+    # value fragmenting into pieces at each "-"/"_" that only the first
+    # piece's adjacency cue could reach. Measured effect: it also matched
+    # standard-base64 SSH public-key bodies and lockfile integrity hashes
+    # wherever a "-"/"_" happened to occur nearby (those don't use
+    # base64url, but the new rule's boundary chars don't require it to),
+    # raising evidence-text FPR from 0.0000 to 0.0370 -- above the 0.02
+    # gate. Skipped per the same rule as the Mailgun key in fix round 2
+    # ("only if it does not raise text/evidence-text FPR"); see
+    # task-2-report.md "Fix round 3". The alnum variant's own "-"/"_"
+    # boundary exclusion (above) is kept: it is a pure precision
+    # improvement (excludes matching a *fragment* of a larger run) with no
+    # measured FPR cost of its own.
     (
         "local-url-credential",
         r"\b[a-z][a-z0-9+.-]*://[^/\s:@]+:([^/\s@]+)@",
@@ -364,6 +407,14 @@ def _format_rules_literal(
     return "\n".join(lines)
 
 
+def _assignment_like_rule_ids(
+    rules: list[tuple[str, str, tuple[str, ...], float | None]],
+) -> list[str]:
+    return sorted(
+        rule_id for rule_id, pattern, _kw, _ent in rules if _ASSIGNMENT_TEMPLATE in pattern
+    )
+
+
 def write_rules_file(
     rules: list[tuple[str, str, tuple[str, ...], float | None]],
     allow_regexes: list[str],
@@ -373,11 +424,13 @@ def write_rules_file(
     body = _format_rules_literal(rules)
     allow_literal = ",\n".join(f"    {r!r}" for r in allow_regexes)
     stop_literal = ",\n".join(f"    {s!r}" for s in stopwords)
+    assignment_ids = _assignment_like_rule_ids(rules)
+    assignment_literal = ",\n".join(f"    {r!r}" for r in assignment_ids)
     content = f'''"""GENERATED by `python3 scripts/gen_redact.py`. Do not edit by hand.
 
 Source: vendor/gitleaks.toml (MIT license, see vendor/GITLEAKS_LICENSE) at
 gitleaks commit {gitleaks_commit}, plus local rules (task-2-brief.md, fix
-rounds 1-2). Edit scripts/gen_redact.py or vendor/gitleaks.toml and run
+rounds 1-3). Edit scripts/gen_redact.py or vendor/gitleaks.toml and run
 `make gen-redact` to regenerate. Patterns are stored as strings, not
 compiled -- see verdict_hot/redact.py for lazy per-rule compilation.
 """
@@ -404,6 +457,17 @@ ALLOWLIST_REGEXES: tuple[str, ...] = (
 
 STOPWORDS: tuple[str, ...] = (
 {stop_literal}
+)
+
+# Fix round 3, item 3: rule ids whose captured group is a freeform value
+# after a "keyword + separator" template (detected structurally by
+# `_ASSIGNMENT_TEMPLATE` in gen_redact.py) -- these need the same
+# placeholder/dictionary-word filtering as generic-api-key and
+# local-env-secret (_redact_filters.py extends this tuple with
+# local-url-credential and the local assignment rules, which do not share
+# this literal template but have the same "freeform value" shape).
+ASSIGNMENT_LIKE_RULE_IDS: tuple[str, ...] = (
+{assignment_literal}
 )
 '''
     OUTPUT_PATH.write_text(content, encoding="utf-8")
