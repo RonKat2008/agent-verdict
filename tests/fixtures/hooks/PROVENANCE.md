@@ -2,6 +2,11 @@
 
 Captured 2026-09-21 with `2.1.278 (Claude Code)` by `make capture-fixtures`.
 Payloads are real hook stdin, sanitized by `scripts/process_fixtures.py`.
+Captures ran with the machine owner's global hooks active (not just this
+project's capture plugin), which is why the raw payload set (git-ignored,
+not part of this fixture set) contains orphan `PreToolUse` payloads with
+no matching `PostToolUse`/`PostToolUseFailure` (see `docs/VERIFIED_FACTS.md`
+row G15).
 
 - `post_tool_use_bash.json`
 - `post_tool_use_write.json`

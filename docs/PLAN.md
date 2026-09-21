@@ -318,7 +318,7 @@ agent-verdict/
 
 **Developer loop** (full recipes go in `docs/DEVELOPING.md`):
 - Run one hook by hand: `VERDICT_HOME=$(mktemp -d) plugin/hooks/run.sh post-fail < tests/fixtures/hooks/post_fail_bash.json; echo "exit=$?"`.
-- Capture fixtures: `make capture-fixtures` runs `claude -p --plugin-dir ./plugin` in a temp HOME with a record-raw build over the tasks in `scripts/capture_tasks.sh`, redacts, and writes `tests/fixtures/hooks/<event>_<tool>.json` plus a `PROVENANCE` line with the Claude Code version and date. `make check` warns when a fixture's version differs from the installed one.
+- Capture fixtures: `make capture-fixtures` runs `claude -p --plugin-dir ./plugin` in a temp working directory (with the real `HOME`, needed for authentication) with a record-raw build over the tasks in `scripts/capture_tasks.sh`, redacts, and writes `tests/fixtures/hooks/<event>_<tool>.json` plus a `PROVENANCE` line with the Claude Code version and date. `make check` warns when a fixture's version differs from the installed one.
 - Cheap real-session test: `make e2e-cheap` runs `claude -p --output-format stream-json --verbose --include-hook-events --plugin-dir ./plugin --max-turns 4` on a task built to fail, and asserts on the Stop `hook_response` (A18).
 
 ## 7. Milestones

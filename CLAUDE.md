@@ -88,7 +88,7 @@ make setup | check | test | test-fast          # [M0] check = ruff, mypy --stric
                                                #      hot-tree diff, ledger-schema test, findings-ledger test
 make bench-hook                                # [M1] cold-start and recorder latency budgets
 make bench-provider                            # [M0 script, M2 target] needs a provider key
-make capture-fixtures                          # [M0] real hook stdin via claude -p in a temp HOME
+make capture-fixtures                          # [M0] real hook stdin via claude -p in a temp working directory
 make plugin-validate                           # [M1] claude plugin validate ./plugin --strict
 make e2e-cheap                                 # [M1] headless session with --include-hook-events on a task built to fail
 make gen-redact                                # [M1] compile pinned gitleaks rules into a stdlib regex module
