@@ -6,7 +6,7 @@ import datetime as dt
 import json
 import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +38,37 @@ def fixture_name(payload: Mapping[str, object]) -> str:
     return f"{snake}_{str(tool).lower()}" if tool else snake
 
 
+def select_payloads(
+    payloads: Sequence[Mapping[str, object]],
+) -> dict[str, Mapping[str, object]]:
+    """Pick one payload per fixture name.
+
+    Prefers a payload whose `tool_use_id` also appears in a PostToolUse or
+    PostToolUseFailure payload, so a pre_tool_use_<tool> fixture and its
+    post_tool_use_<tool> fixture share one tool_use_id instead of coming from
+    two different invocations of the same tool (for example when a hook like
+    a permission gate blocks the first attempt and the tool is retried).
+    Falls back to the first payload seen for a name when none is paired.
+    """
+    completed_ids = {
+        payload.get("tool_use_id")
+        for payload in payloads
+        if payload.get("hook_event_name") in ("PostToolUse", "PostToolUseFailure")
+    }
+    selected: dict[str, Mapping[str, object]] = {}
+    for payload in payloads:
+        name = fixture_name(payload)
+        current = selected.get(name)
+        if current is None:
+            selected[name] = payload
+            continue
+        candidate_paired = payload.get("tool_use_id") in completed_ids
+        current_paired = current.get("tool_use_id") in completed_ids
+        if candidate_paired and not current_paired:
+            selected[name] = payload
+    return selected
+
+
 def claude_version() -> str:
     result = subprocess.run(["claude", "--version"], capture_output=True, text=True, check=False)
     return result.stdout.strip() or "unknown"
@@ -45,16 +76,14 @@ def claude_version() -> str:
 
 def main() -> int:
     home = str(Path.home())
-    written: dict[str, Path] = {}
+    payloads: list[Mapping[str, object]] = []
     for raw_path in sorted(RAW_DIR.glob("*.json")):
         try:
-            payload = json.loads(raw_path.read_text())
+            payloads.append(json.loads(raw_path.read_text()))
         except json.JSONDecodeError:
             print(f"skipping unparseable payload {raw_path.name}")
-            continue
-        name = fixture_name(payload)
-        if name in written:
-            continue
+    written: dict[str, Path] = {}
+    for name, payload in select_payloads(payloads).items():
         out_path = OUT_DIR / f"{name}.json"
         out_path.write_text(json.dumps(sanitize(payload, home), indent=1, sort_keys=True) + "\n")
         written[name] = out_path
