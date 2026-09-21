@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Verdict ledger row v1",
+  "description": "M1 events only: session_start, prompt, post, post_fail, stop, session_end.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_v", "ts", "event", "session_id", "prompt_id", "agent_id"],
+  "properties": {
+    "schema_v": { "const": 1 },
+    "ts": { "type": "number" },
+    "event": {
+      "enum": ["session_start", "prompt", "post", "post_fail", "stop", "session_end"]
+    },
+    "session_id": { "type": "string" },
+    "prompt_id": { "type": ["string", "null"] },
+    "agent_id": { "type": ["string", "null"] },
+    "plugin_version": { "type": "string" },
+    "permission_mode": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "event": { "const": "session_start" } } },
+      "then": {
+        "required": ["source", "cwd_hash", "cc_effort"],
+        "properties": {
+          "source": { "type": "string" },
+          "model": { "type": ["string", "null"] },
+          "cwd_hash": { "type": "string" },
+          "cc_effort": { "type": ["string", "null"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "prompt" } } },
+      "then": {
+        "required": ["prompt_excerpt", "redaction_hits"],
+        "properties": {
+          "prompt_excerpt": { "type": "string" },
+          "redaction_hits": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "post" } } },
+      "then": {
+        "required": [
+          "tool_use_id",
+          "tool_name",
+          "input_excerpt",
+          "out_head",
+          "out_tail",
+          "raw_bytes",
+          "duration_ms",
+          "is_check",
+          "soft_fail_candidate",
+          "redaction_hits",
+          "sanitized_chars"
+        ],
+        "properties": {
+          "tool_use_id": { "type": "string" },
+          "tool_name": { "type": "string" },
+          "input_excerpt": { "type": "string" },
+          "out_head": { "type": "string" },
+          "out_tail": { "type": "string" },
+          "raw_bytes": { "type": "integer" },
+          "duration_ms": { "type": "number" },
+          "is_check": { "type": "boolean" },
+          "soft_fail_candidate": { "type": "boolean" },
+          "mcp_server": { "type": ["object", "null"] },
+          "redaction_hits": { "type": "integer" },
+          "sanitized_chars": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "post_fail" } } },
+      "then": {
+        "required": [
+          "tool_use_id",
+          "tool_name",
+          "input_excerpt",
+          "status",
+          "exit_code",
+          "is_interrupt",
+          "error_excerpt",
+          "duration_ms"
+        ],
+        "properties": {
+          "tool_use_id": { "type": "string" },
+          "tool_name": { "type": "string" },
+          "input_excerpt": { "type": "string" },
+          "status": { "const": "error" },
+          "exit_code": { "type": ["integer", "null"] },
+          "is_interrupt": { "type": "boolean" },
+          "error_excerpt": { "type": "string" },
+          "duration_ms": { "type": "number" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "stop" } } },
+      "then": {
+        "required": ["stop_hook_active", "final_message_excerpt", "claims", "background_tasks_n"],
+        "properties": {
+          "stop_hook_active": { "type": "boolean" },
+          "final_message_excerpt": { "type": "string" },
+          "claims": { "type": "array" },
+          "background_tasks_n": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "session_end" } } },
+      "then": {
+        "required": ["reason"],
+        "properties": {
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

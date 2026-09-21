@@ -11,7 +11,13 @@ dependencies = []
 verdict = "agent_verdict.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "hypothesis>=6", "ruff>=0.6", "mypy>=1.11", "pre-commit>=3.8"]
+# mypy 2.0.0 dropped `--python-version 3.9` support ("Python 3.9 is not
+# supported (must be 3.10 or higher)"), but task-1-brief requires a second
+# `uv run mypy --python-version 3.9 plugin/hooks` invocation to catch typing
+# that would be wrong on the 3.9 interpreter the hot path actually runs on.
+# 1.20.2 is the newest release that still accepts it, so mypy is capped below
+# 2.0 here rather than dropping the 3.9-targeted check.
+dev = ["pytest>=8", "hypothesis>=6", "ruff>=0.6", "mypy>=1.11,<2", "pre-commit>=3.8"]
 
 [build-system]
 requires = ["hatchling"]
@@ -35,13 +41,26 @@ extend-exclude = ["docs"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
+[tool.ruff.lint.per-file-ignores]
+# plugin/hooks must run on the stdlib-only Python 3.9 interpreter bundled with
+# macOS (task-1-brief). UP007 rewrites typing.Optional/Union into PEP 604
+# `X | Y` syntax even inside cast()/TypeAlias positions that ARE evaluated at
+# runtime (not just deferred annotations), and UP038 rewrites
+# isinstance(x, (A, B)) into isinstance(x, A | B), which calls type.__or__ and
+# raises TypeError on 3.9. Both are 3.10+-only at runtime, so they are disabled
+# for the hot tree.
+"plugin/hooks/**" = ["UP007", "UP038"]
+
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["src", "scripts", "tests"]
+files = ["src", "scripts", "tests", "plugin/hooks"]
 exclude = ["scripts/fixture_capture_plugin"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["scripts"]
+pythonpath = ["scripts", "plugin/hooks"]
 addopts = "-q"
+markers = [
+    "slow: exercises multiple processes and may take several seconds",
+]

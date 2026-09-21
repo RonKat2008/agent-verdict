@@ -1,14 +1,20 @@
-.PHONY: setup check test test-fast capture-fixtures bench-provider clean
+.PHONY: setup check test test-fast sync-hot capture-fixtures bench-provider clean
 
 setup:
 	uv sync
 	uv run pre-commit install
+	$(MAKE) sync-hot
+
+sync-hot:
+	uv run python scripts/sync_hot.py
 
 check:
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run mypy
-	uv run pytest tests/test_findings_ledger.py
+	uv run mypy --python-version 3.9 plugin/hooks
+	diff -r --exclude=__pycache__ plugin/hooks/verdict_hot src/agent_verdict/verdict_hot
+	uv run pytest tests/test_findings_ledger.py tests/test_import_ban.py tests/unit/test_ledger.py
 
 test:
 	uv run pytest
