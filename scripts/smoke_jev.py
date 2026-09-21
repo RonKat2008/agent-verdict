@@ -145,6 +145,8 @@ def build_payload(model: str, state_tokens: int, n_questions: int) -> dict[str, 
 
 
 def validate_answers(body: Mapping[str, object], questions: Mapping[str, object]) -> None:
+    if not isinstance(body, Mapping):
+        raise ValueError("response body is not an object")
     answers = body.get("answers")
     if not isinstance(answers, dict):
         raise ValueError("response has no answers object")
@@ -171,12 +173,12 @@ def percentile(values: Sequence[float], pct: float) -> float:
 def _read_response(
     provider: Provider,
     payload: Mapping[str, object],
+    body: bytes,
     key: str,
     timeout_s: float,
     context: ssl.SSLContext,
     start: float,
 ) -> Sample:
-    body = json.dumps(payload).encode()
     conn = http.client.HTTPSConnection(provider.host, timeout=timeout_s, context=context)
     conn.connect()
     connected = time.perf_counter()
@@ -212,16 +214,18 @@ def _sample_from_body(
         questions = payload["questions"]
         assert isinstance(questions, dict)
         validate_answers(parsed, questions)
+        usage = parsed.get("usage")
+        if usage is not None and not isinstance(usage, dict):
+            raise ValueError("usage is not an object")
     except (ValueError, AssertionError) as exc:
         return Sample(conn_ms, infer_ms, conn_ms + infer_ms, 200, None, None, f"invalid: {exc}")
-    usage = parsed.get("usage") or {}
     return Sample(
         conn_ms,
         infer_ms,
         conn_ms + infer_ms,
         200,
         parsed.get("model"),
-        usage.get("input_tokens"),
+        (usage or {}).get("input_tokens"),
         None,
     )
 
@@ -233,9 +237,10 @@ def call_once(
     timeout_s: float,
     context: ssl.SSLContext,
 ) -> Sample:
+    body = json.dumps(payload).encode()
     start = time.perf_counter()
     try:
-        return _read_response(provider, payload, key, timeout_s, context, start)
+        return _read_response(provider, payload, body, key, timeout_s, context, start)
     except (OSError, http.client.HTTPException) as exc:
         elapsed = (time.perf_counter() - start) * 1000
         return Sample(0.0, 0.0, elapsed, 0, None, None, type(exc).__name__)

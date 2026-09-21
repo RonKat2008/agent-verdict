@@ -1,3 +1,6 @@
+import json
+from collections.abc import Mapping
+
 import pytest
 import smoke_jev as sj
 
@@ -24,8 +27,6 @@ def test_payload_has_pinned_model_requested_questions_and_provenance_sections() 
 
 
 def test_payload_state_size_is_close_to_requested_tokens() -> None:
-    import json
-
     payload = sj.build_payload("jev-1.13.0", state_tokens=1200, n_questions=6)
     approx_tokens = len(json.dumps(payload["state"])) / 4
     assert 1000 <= approx_tokens <= 1500
@@ -81,3 +82,44 @@ def test_main_returns_2_when_no_provider_has_a_key(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     assert sj.main(["--n", "1", "--provider", "openrouter", "--provider", "typesafe"]) == 2
+
+
+def _valid_answers_body(payload: Mapping[str, object]) -> dict[str, object]:
+    questions = payload["questions"]
+    assert isinstance(questions, dict)
+    answers: dict[str, object] = {}
+    for key, question in questions.items():
+        qtype = question["type"]
+        value = 0.5 if qtype == "noul" else 2.0
+        answers[key] = {"type": qtype, qtype: value}
+    return {"answers": answers, "model": payload["model"]}
+
+
+def test_sample_from_body_rejects_json_array_body() -> None:
+    payload = sj.build_payload("m", state_tokens=50, n_questions=1)
+    sample = sj._sample_from_body(b"[1, 2, 3]", payload, 1.0, 2.0)
+    assert sample.status == 200
+    assert sample.error is not None and sample.error.startswith("invalid")
+
+
+def test_sample_from_body_rejects_json_string_body() -> None:
+    payload = sj.build_payload("m", state_tokens=50, n_questions=1)
+    sample = sj._sample_from_body(b'"just a string"', payload, 1.0, 2.0)
+    assert sample.status == 200
+    assert sample.error is not None and sample.error.startswith("invalid")
+
+
+def test_sample_from_body_rejects_non_json_body() -> None:
+    payload = sj.build_payload("m", state_tokens=50, n_questions=1)
+    sample = sj._sample_from_body(b"not json at all", payload, 1.0, 2.0)
+    assert sample.status == 200
+    assert sample.error is not None and sample.error.startswith("invalid")
+
+
+def test_sample_from_body_rejects_dict_with_non_dict_usage() -> None:
+    payload = sj.build_payload("m", state_tokens=50, n_questions=1)
+    body = _valid_answers_body(payload)
+    body["usage"] = ["not", "an", "object"]
+    sample = sj._sample_from_body(json.dumps(body).encode(), payload, 1.0, 2.0)
+    assert sample.status == 200
+    assert sample.error is not None and sample.error.startswith("invalid")
