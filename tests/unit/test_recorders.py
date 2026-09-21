@@ -250,3 +250,217 @@ def test_record_falls_back_to_packaged_default_on_broken_user_policy(
     assert outcome == "ok"
     rows = ledger.read_session(payload["session_id"])
     assert rows[0]["event"] == "session_end"
+
+
+# --- Fix round 1: structural summaries instead of file/prompt content ------
+#
+# Critical + Important findings: tool_response for Write/Edit/Read carried
+# whole file contents via the generic JSON dump, and Agent carried the full
+# delegation prompt. Both are now replaced by per-tool structural summaries
+# (or, for Agent, the subagent's result text plus structural fields) built
+# from an explicit field allowlist, computed BEFORE the normalize/redact/
+# truncate pipeline runs.
+
+
+def _leaked_json_fragment(key: str, value: object) -> str:
+    """The exact `"key": <value>` substring a naive `json.dumps` would emit."""
+    return json.dumps({key: value})[1:-1]
+
+
+def _row_str(row: dict[str, Any], key: str) -> str:
+    value = row[key]
+    assert isinstance(value, str)
+    return value
+
+
+def _out_head_summary(row: dict[str, Any]) -> dict[str, Any]:
+    return dict(json.loads(_row_str(row, "out_head")))
+
+
+def test_write_fixture_out_head_has_no_file_content(default_policy: Policy) -> None:
+    payload = _load("post_tool_use_write.json")
+    event = parsers.parse_event(payload)
+    assert isinstance(event, parsers.PostEvent)
+    assert isinstance(event.tool_response, dict)
+
+    row = recorders.build_row(event, default_policy, now=0.0)
+    serialized = json.dumps(row)
+
+    assert _leaked_json_fragment("content", event.tool_response["content"]) not in serialized
+    assert row["out_kind"] == "structural"
+    summary = _out_head_summary(row)
+    assert summary["content_bytes"] == len(b"hi")
+    assert summary["had_original"] is False
+    assert summary["type"] == "create"
+    assert summary["userModified"] is False
+    assert summary["filePath"].endswith("note.txt")
+
+
+def test_edit_fixture_out_head_has_no_file_content(default_policy: Policy) -> None:
+    payload = _load("post_tool_use_edit.json")
+    event = parsers.parse_event(payload)
+    assert isinstance(event, parsers.PostEvent)
+
+    row = recorders.build_row(event, default_policy, now=0.0)
+    serialized = json.dumps(row)
+
+    assert _leaked_json_fragment("oldString", "hi") not in serialized
+    assert _leaked_json_fragment("newString", "hello") not in serialized
+    assert _leaked_json_fragment("originalFile", "hi") not in serialized
+    assert row["out_kind"] == "structural"
+    summary = _out_head_summary(row)
+    assert summary["old_bytes"] == len(b"hi")
+    assert summary["new_bytes"] == len(b"hello")
+    assert summary["patch_hunks"] == 1
+    assert summary["replaceAll"] is False
+    assert summary["userModified"] is False
+
+
+def test_read_fixture_out_head_has_no_file_content(default_policy: Policy) -> None:
+    payload = _load("post_tool_use_read.json")
+    event = parsers.parse_event(payload)
+    assert isinstance(event, parsers.PostEvent)
+
+    row = recorders.build_row(event, default_policy, now=0.0)
+    serialized = json.dumps(row)
+
+    assert _leaked_json_fragment("content", "hi") not in serialized
+    assert row["out_kind"] == "structural"
+    summary = _out_head_summary(row)
+    assert summary["numLines"] == 1
+    assert summary["startLine"] == 1
+    assert summary["totalLines"] == 1
+    assert summary["type"] == "text"
+    assert summary["filePath"].endswith("note.txt")
+
+
+def test_agent_fixture_out_head_has_no_prompt(default_policy: Policy) -> None:
+    payload = _load("post_tool_use_agent.json")
+    event = parsers.parse_event(payload)
+    assert isinstance(event, parsers.PostEvent)
+    assert isinstance(event.tool_response, dict)
+    prompt_text = event.tool_response["prompt"]
+    assert isinstance(prompt_text, str) and len(prompt_text) > 20  # sanity: real fixture value
+
+    row = recorders.build_row(event, default_policy, now=0.0)
+    serialized = json.dumps(row)
+
+    assert prompt_text not in serialized
+    assert row["out_kind"] == "text"
+    out_head = _row_str(row, "out_head")
+    assert "async_launched" in out_head  # status: structural field kept
+    assert "isAsync" in out_head or "true" in out_head.lower()
+
+
+def test_notebook_edit_synthetic_payload_has_no_content(default_policy: Policy) -> None:
+    """No real NotebookEdit fixture exists; this exercises the Edit-shaped
+    branch reused for it (task-4 fix round 1, item 1) -- unverified against
+    a real payload, per the controller's instruction."""
+    payload = _load("post_tool_use_edit.json")
+    payload["tool_name"] = "NotebookEdit"
+    payload["tool_input"] = {
+        "notebook_path": "/tmp/nb.ipynb",
+        "cell_id": "abc123",
+        "new_source": "print('hello')",
+    }
+    payload["tool_response"] = {
+        "filePath": "/tmp/nb.ipynb",
+        "oldString": "print('old')",
+        "newString": "print('hello')",
+        "originalFile": "print('old')",
+        "replaceAll": False,
+        "userModified": False,
+        "structuredPatch": [{"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1}],
+    }
+    event = parsers.parse_event(payload)
+    assert isinstance(event, parsers.PostEvent)
+
+    row = recorders.build_row(event, default_policy, now=0.0)
+    serialized = json.dumps(row)
+
+    assert "print('old')" not in serialized
+    assert "print('hello')" not in serialized  # response newString, not tool_input
+    assert row["out_kind"] == "structural"
+    summary = _out_head_summary(row)
+    assert summary["old_bytes"] == len(b"print('old')")
+    assert summary["new_bytes"] == len(b"print('hello')")
+    assert summary["patch_hunks"] == 1
+
+
+def test_synthetic_write_with_large_content_never_leaks_marker(default_policy: Policy) -> None:
+    marker = "UNIQUE_MARKER_XYZ_10KB"
+    content = marker + ("x" * 10_000)
+    payload = _load("post_tool_use_write.json")
+    payload["tool_input"] = {"content": content, "file_path": "/tmp/big.txt"}
+    payload["tool_response"] = {
+        "type": "create",
+        "filePath": "/tmp/big.txt",
+        "content": content,
+        "structuredPatch": [],
+        "originalFile": None,
+        "userModified": False,
+    }
+    event = parsers.parse_event(payload)
+    assert isinstance(event, parsers.PostEvent)
+
+    row = recorders.build_row(event, default_policy, now=0.0)
+    serialized = json.dumps(row)
+
+    assert marker not in serialized
+    summary = _out_head_summary(row)
+    assert summary["content_bytes"] == len(content.encode("utf-8"))
+
+
+def test_mcp_payload_with_large_text_field_is_omitted(default_policy: Policy) -> None:
+    big_text = "B" * 5000
+    payload = _load("post_tool_use_bash.json")
+    payload["tool_name"] = "mcp__github__search_repos"
+    payload["tool_input"] = {"query": "verdict"}
+    payload["tool_response"] = {"status": "ok", "text": big_text}
+    event = parsers.parse_event(payload)
+    assert isinstance(event, parsers.PostEvent)
+
+    row = recorders.build_row(event, default_policy, now=0.0)
+    serialized = json.dumps(row)
+
+    assert big_text not in serialized
+    assert f"[omitted {len(big_text)} chars]" in serialized
+    assert row["out_kind"] == "text"
+
+
+def test_mcp_payload_with_short_text_field_is_kept(default_policy: Policy) -> None:
+    payload = _load("post_tool_use_bash.json")
+    payload["tool_name"] = "mcp__github__search_repos"
+    payload["tool_input"] = {"query": "verdict"}
+    payload["tool_response"] = {"status": "ok", "text": "short result"}
+    event = parsers.parse_event(payload)
+    assert isinstance(event, parsers.PostEvent)
+
+    row = recorders.build_row(event, default_policy, now=0.0)
+
+    assert "short result" in _row_str(row, "out_head")
+
+
+def test_bash_output_still_kind_text(default_policy: Policy) -> None:
+    event = parsers.parse_event(_load("post_tool_use_bash.json"))
+    row = recorders.build_row(event, default_policy, now=0.0)
+    assert row["out_kind"] == "text"
+
+
+def test_write_row_still_validates_against_schema(default_policy: Policy) -> None:
+    event = parsers.parse_event(_load("post_tool_use_write.json"))
+    row = recorders.build_row(event, default_policy, now=0.0)
+    validate_row(row)
+
+
+def test_build_row_purity_holds_for_write_event(default_policy: Policy) -> None:
+    payload = _load("post_tool_use_write.json")
+    event = parsers.parse_event(payload)
+    assert isinstance(event, parsers.PostEvent)
+    tool_input_before = dict(event.tool_input)
+    tool_response_before = copy.deepcopy(event.tool_response)
+
+    recorders.build_row(event, default_policy, now=0.0)
+
+    assert dict(event.tool_input) == tool_input_before
+    assert event.tool_response == tool_response_before

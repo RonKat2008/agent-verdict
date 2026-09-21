@@ -19,16 +19,27 @@ never be split across the cut). A redactor exception (`redact` returning
 `soft_fail_candidate`) and `claims` (needed only for `stop`) are imported
 lazily inside the builders that need them, per the hot-path lazy-import
 rule (global-constraints.md).
+
+`post` rows never store a tool's raw file content or an Agent delegation
+prompt in `out_head`/`out_tail` (task-4 fix round 1): `_tool_output.py`
+builds a structural summary for Write/Edit/NotebookEdit/Read/Glob/Grep
+(`out_kind="structural"`), keeps only an Agent's result text plus a small
+structural-field allowlist (`out_kind="text"`), and for every other tool
+(Bash, WebFetch, MCP, unknown) walks the response and replaces any string
+over 2,000 characters stored under a content-shaped key name
+(`content`, `originalFile`, `oldString`, `newString`, `prompt`, `file`,
+`data`, `body`, `text`) with `"[omitted N chars]"` before the usual
+normalize/redact/truncate pipeline runs. See `_tool_output.py`'s docstring
+for the full per-tool field allowlists.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 from collections.abc import Mapping
 
-from . import PLUGIN_VERSION, SCHEMA_V, ledger, parsers, redact, textnorm
+from . import PLUGIN_VERSION, SCHEMA_V, _tool_output, ledger, parsers, redact, textnorm
 from .parsers import (
     Common,
     HookEvent,
@@ -56,13 +67,6 @@ _EVENT_NAMES: dict[type, str] = {
 
 def _cwd_hash(cwd: str) -> str:
     return hashlib.sha256(cwd.encode("utf-8")).hexdigest()[:16]
-
-
-def _json_compact(value: object) -> str:
-    try:
-        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        return str(value)
 
 
 def _process_excerpt(
@@ -121,25 +125,7 @@ def _raw_input_excerpt(tool_name: str, tool_input: Mapping[str, object]) -> str:
             return description
         prompt = tool_input.get("prompt")
         return prompt[:300] if isinstance(prompt, str) else ""
-    return _json_compact(dict(tool_input))
-
-
-def _bash_output_text(tool_response: object) -> str:
-    if not isinstance(tool_response, dict):
-        return _json_compact(tool_response)
-    stdout = tool_response.get("stdout")
-    stderr = tool_response.get("stderr")
-    stdout_text = stdout if isinstance(stdout, str) else ""
-    stderr_text = stderr if isinstance(stderr, str) else ""
-    if stderr_text:
-        return stdout_text + "\n[stderr]\n" + stderr_text
-    return stdout_text
-
-
-def _tool_output_text(tool_name: str, tool_response: object) -> str:
-    if tool_name == "Bash":
-        return _bash_output_text(tool_response)
-    return _json_compact(tool_response)
+    return _tool_output.json_compact(dict(tool_input))
 
 
 def _command_from(tool_input: Mapping[str, object]) -> str | None:
@@ -195,8 +181,8 @@ def _build_post_fields(event: PostEvent, policy: Policy) -> dict[str, object]:
     is_check_val = _is_check_excluding_command_trigger(event.tool_name, command, tool_input, policy)
 
     raw_input = _raw_input_excerpt(event.tool_name, tool_input)
-    raw_output = _tool_output_text(event.tool_name, event.tool_response)
-    raw_bytes = len(raw_output.encode("utf-8"))
+    raw_output, out_kind = _tool_output.tool_output_text(event.tool_name, event.tool_response)
+    raw_bytes = _tool_output.raw_output_bytes(event.tool_name, event.tool_response)
     soft_fail = gates.is_soft_fail_candidate(event.tool_name, command, raw_output, policy)
 
     input_excerpt, in_hits, in_sanitized, in_failed = _process_excerpt(
@@ -223,6 +209,7 @@ def _build_post_fields(event: PostEvent, policy: Policy) -> dict[str, object]:
         "input_excerpt": input_excerpt,
         "out_head": out_head,
         "out_tail": out_tail,
+        "out_kind": out_kind,
         "raw_bytes": raw_bytes,
         "duration_ms": duration_ms,
         "is_check": is_check_val,

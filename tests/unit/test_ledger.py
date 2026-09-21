@@ -43,6 +43,7 @@ EVENT_ROWS: dict[str, dict[str, Any]] = {
         input_excerpt="ls",
         out_head="",
         out_tail="",
+        out_kind="text",
         raw_bytes=0,
         duration_ms=1.0,
         is_check=False,
