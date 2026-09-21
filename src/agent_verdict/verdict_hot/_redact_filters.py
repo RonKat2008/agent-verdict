@@ -144,11 +144,27 @@ _EXCLUDED_PEM_TYPES = frozenset({"PUBLIC KEY", "CERTIFICATE"})
 
 _ENTROPY_RULE_IDS = frozenset({"local-high-entropy-alnum", "local-high-entropy-b64"})
 
-# Value prefixes that mark the value itself as public by convention (fix
-# round 4): Stripe publishable keys are documented as shippable in client
-# code. Secret-side prefixes (`sk_live_`, `rk_live_`) are deliberately NOT
-# here.
-_PUBLIC_VALUE_PREFIXES = ("pk_live_", "pk_test_")
+# Values that are public by convention (fix round 4): Stripe publishable
+# keys are documented as shippable in client code. Fix round 5 replaced the
+# prefix test this started as -- any tail could ride the prefix, so
+# `password = "pk_live_<30 random>"` leaked -- with Stripe's full real
+# shape, matched end to end. Secret-side prefixes (`sk_live_`, `rk_live_`)
+# are deliberately absent.
+_PUBLISHABLE_KEY_RE = re.compile(r"pk_(?:live|test)_[A-Za-z0-9]{24,}")
+
+# Contexts where the exemption above is never granted, however well-formed
+# the value looks: a publishable key is not a database password, so a value
+# sitting in a URL credential or after a password-named key is a secret
+# someone pasted into the wrong field, not a publishable key (fix round 5).
+_NEVER_PUBLIC_RULE_IDS = frozenset({"local-url-credential", "local-password-assignment"})
+_PASSWORD_ASSIGNMENT_RE = re.compile(r"(?:password|passwd|pwd)\W{0,6}$", re.IGNORECASE)
+
+# Lowercase words joined by hyphens (`keyboard-interactive`,
+# `gssapi-with-mic`): vocabulary, never a secret (fix round 5). The
+# vendored `generic-api-key` rule accepts `,` as a keyword/value separator,
+# so every hyphenated word after "password" in an SSH or PAM auth-method
+# list was being captured as a value.
+_HYPHENATED_WORDS_RE = re.compile(r"[a-z]{2,}(?:-[a-z]{2,})+")
 
 # Fix round 3, item 3: placeholder/dictionary-word/plain-word filtering now
 # applies to every rule whose captured secret is a freeform "password-like"
@@ -325,26 +341,47 @@ def _passes_entropy_filters(secret: str, preceding_text: str, pem_context: str) 
     return not is_inside_excluded_pem_block(pem_context)
 
 
-def has_public_token_prefix(value: str) -> bool:
-    """True for a value whose own prefix marks it PUBLIC by convention.
+def is_stripe_publishable_key(value: str) -> bool:
+    """True when the WHOLE value is a Stripe publishable key.
 
-    Stripe documents `pk_live_`/`pk_test_` as publishable keys meant to be
-    shipped in client code. The adjacency cue list covers this for the
-    entropy rules (whose span starts after the prefix); here the prefix is
-    the start of the captured value itself, which is how an assignment rule
-    (`STRIPE_PUBLISHABLE_KEY=pk_live_...`) sees it. Fix round 4: the
-    tightened dictionary-word filter no longer rejects these by accident,
-    so the convention is stated explicitly instead.
+    Stripe documents `pk_live_`/`pk_test_` keys as shippable in client
+    code, so redacting one removes no secret. The match is anchored at both
+    ends (fix round 5): a prefix test let any tail ride the prefix, which
+    exempted real secrets such as `pk_live_<30 random chars>` sitting in a
+    password field.
     """
-    return _unwrap(value).lower().startswith(_PUBLIC_VALUE_PREFIXES)
+    return _PUBLISHABLE_KEY_RE.fullmatch(_unwrap(value)) is not None
 
 
-def _passes_assignment_filters(secret: str) -> bool:
+def looks_like_hyphenated_words(value: str) -> bool:
+    """True for lowercase words joined by hyphens (`keyboard-interactive`).
+
+    Fix round 5: a value made only of lowercase letters and hyphens is
+    vocabulary -- an auth-method name, a feature flag, a log token -- not a
+    secret, which always carries a digit, a capital or a symbol. This
+    extends the plain-English word check across a hyphen, and reaches the
+    two-part values the dictionary-word filter (3 parts or more) does not.
+    """
+    return _HYPHENATED_WORDS_RE.fullmatch(_unwrap(value)) is not None
+
+
+def _is_public_value(rule_id: str, secret: str, preceding_text: str) -> bool:
+    """A value that is public by convention AND is not in a password slot."""
+    if rule_id in _NEVER_PUBLIC_RULE_IDS or "password" in rule_id or "passwd" in rule_id:
+        return False
+    if _PASSWORD_ASSIGNMENT_RE.search(preceding_text):
+        return False
+    return is_stripe_publishable_key(secret)
+
+
+def _passes_assignment_filters(rule_id: str, secret: str, preceding_text: str) -> bool:
     if looks_like_plain_english_word(secret):
+        return False
+    if looks_like_hyphenated_words(secret):
         return False
     if looks_like_placeholder(secret):
         return False
-    if has_public_token_prefix(secret):
+    if _is_public_value(rule_id, secret, preceding_text):
         return False
     return not looks_like_dictionary_words(secret)
 
@@ -363,5 +400,5 @@ def passes_local_filters(
     if rule_id in _ENTROPY_RULE_IDS:
         return _passes_entropy_filters(secret, preceding_text, pem_context)
     if rule_id in _ASSIGNMENT_RULE_IDS:
-        return _passes_assignment_filters(secret)
+        return _passes_assignment_filters(rule_id, secret, preceding_text)
     return True
