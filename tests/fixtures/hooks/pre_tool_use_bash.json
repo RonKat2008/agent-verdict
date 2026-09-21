@@ -1,0 +1,14 @@
+{
+ "cwd": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ",
+ "hook_event_name": "PreToolUse",
+ "permission_mode": "acceptEdits",
+ "prompt_id": "9ec829d2-3162-444c-8179-b417ac801235",
+ "session_id": "56422690-bc20-4983-b21e-8514b3d56b4b",
+ "tool_input": {
+  "command": "echo hello",
+  "description": "Execute the echo command"
+ },
+ "tool_name": "Bash",
+ "tool_use_id": "toolu_013o22E8CxU2DsECXTvzaGbF",
+ "transcript_path": "/Users/USER/.claude/projects/-private-var-folders-p2-xpfv5y4n1q9gmxzf52f5q3l40000gn-T-tmp-gOyhlOEkeJ/56422690-bc20-4983-b21e-8514b3d56b4b.jsonl"
+}

@@ -1,0 +1,17 @@
+{
+ "cwd": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ",
+ "duration_ms": 410,
+ "error": "Exit code 3\nboom",
+ "hook_event_name": "PostToolUseFailure",
+ "is_interrupt": false,
+ "permission_mode": "acceptEdits",
+ "prompt_id": "db5b98cd-88f7-422a-9c10-bc3d487e5d47",
+ "session_id": "0e72a50a-26a8-435d-8708-523dd0eecddd",
+ "tool_input": {
+  "command": "sh -c 'echo boom >&2; exit 3'",
+  "description": "Run the specified command and check exit code"
+ },
+ "tool_name": "Bash",
+ "tool_use_id": "toolu_0123j6wgsDxTvNRbm4Eo8NEe",
+ "transcript_path": "/Users/USER/.claude/projects/-private-var-folders-p2-xpfv5y4n1q9gmxzf52f5q3l40000gn-T-tmp-gOyhlOEkeJ/0e72a50a-26a8-435d-8708-523dd0eecddd.jsonl"
+}

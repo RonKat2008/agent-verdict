@@ -1,0 +1,23 @@
+{
+ "agent_id": "a6ff92b84da5e1deb",
+ "agent_transcript_path": "/Users/USER/.claude/projects/-private-var-folders-p2-xpfv5y4n1q9gmxzf52f5q3l40000gn-T-tmp-gOyhlOEkeJ/1699e847-2c5b-4535-ae0b-4ab9335d5646/subagents/agent-a6ff92b84da5e1deb.jsonl",
+ "agent_type": "general-purpose",
+ "background_tasks": [
+  {
+   "agent_type": "general-purpose",
+   "description": "Run shell command and report output",
+   "id": "a6ff92b84da5e1deb",
+   "status": "running",
+   "type": "subagent"
+  }
+ ],
+ "cwd": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ",
+ "hook_event_name": "SubagentStop",
+ "last_assistant_message": "The exact output of the command `echo sub` is:\n\n```\nsub\n```",
+ "permission_mode": "acceptEdits",
+ "prompt_id": "8484791c-4038-488d-b2aa-ca0ecc0ad522",
+ "session_crons": [],
+ "session_id": "1699e847-2c5b-4535-ae0b-4ab9335d5646",
+ "stop_hook_active": false,
+ "transcript_path": "/Users/USER/.claude/projects/-private-var-folders-p2-xpfv5y4n1q9gmxzf52f5q3l40000gn-T-tmp-gOyhlOEkeJ/1699e847-2c5b-4535-ae0b-4ab9335d5646.jsonl"
+}

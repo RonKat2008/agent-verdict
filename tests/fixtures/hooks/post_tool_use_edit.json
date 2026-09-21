@@ -1,0 +1,39 @@
+{
+ "cwd": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ",
+ "duration_ms": 2,
+ "hook_event_name": "PostToolUse",
+ "permission_mode": "acceptEdits",
+ "prompt_id": "b6027b00-cda7-421e-a049-e52ae7462dd1",
+ "session_id": "5668ec28-8187-4443-bfc9-b89bf23120bc",
+ "tool_input": {
+  "file_path": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ/note.txt",
+  "new_string": "hello",
+  "old_string": "hi",
+  "replace_all": false
+ },
+ "tool_name": "Edit",
+ "tool_response": {
+  "filePath": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ/note.txt",
+  "newString": "hello",
+  "oldString": "hi",
+  "originalFile": "hi",
+  "replaceAll": false,
+  "structuredPatch": [
+   {
+    "lines": [
+     "-hi",
+     "\\ No newline at end of file",
+     "+hello",
+     "\\ No newline at end of file"
+    ],
+    "newLines": 1,
+    "newStart": 1,
+    "oldLines": 1,
+    "oldStart": 1
+   }
+  ],
+  "userModified": false
+ },
+ "tool_use_id": "toolu_01G4c8Ku4BpQJyNapaRu2EaE",
+ "transcript_path": "/Users/USER/.claude/projects/-private-var-folders-p2-xpfv5y4n1q9gmxzf52f5q3l40000gn-T-tmp-gOyhlOEkeJ/5668ec28-8187-4443-bfc9-b89bf23120bc.jsonl"
+}

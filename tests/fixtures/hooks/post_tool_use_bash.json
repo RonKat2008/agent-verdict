@@ -1,0 +1,22 @@
+{
+ "cwd": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ",
+ "duration_ms": 497,
+ "hook_event_name": "PostToolUse",
+ "permission_mode": "acceptEdits",
+ "prompt_id": "9ec829d2-3162-444c-8179-b417ac801235",
+ "session_id": "56422690-bc20-4983-b21e-8514b3d56b4b",
+ "tool_input": {
+  "command": "echo hello",
+  "description": "Execute the echo command"
+ },
+ "tool_name": "Bash",
+ "tool_response": {
+  "interrupted": false,
+  "isImage": false,
+  "noOutputExpected": false,
+  "stderr": "",
+  "stdout": "hello"
+ },
+ "tool_use_id": "toolu_01GzUYFtnL9iBH2yd7XZVraZ",
+ "transcript_path": "/Users/USER/.claude/projects/-private-var-folders-p2-xpfv5y4n1q9gmxzf52f5q3l40000gn-T-tmp-gOyhlOEkeJ/56422690-bc20-4983-b21e-8514b3d56b4b.jsonl"
+}

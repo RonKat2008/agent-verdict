@@ -1,0 +1,24 @@
+{
+ "cwd": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ",
+ "duration_ms": 1,
+ "hook_event_name": "PostToolUse",
+ "permission_mode": "acceptEdits",
+ "prompt_id": "b6027b00-cda7-421e-a049-e52ae7462dd1",
+ "session_id": "5668ec28-8187-4443-bfc9-b89bf23120bc",
+ "tool_input": {
+  "file_path": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ/note.txt"
+ },
+ "tool_name": "Read",
+ "tool_response": {
+  "file": {
+   "content": "hi",
+   "filePath": "/private/var/folders/p2/xpfv5y4n1q9gmxzf52f5q3l40000gn/T/tmp.gOyhlOEkeJ/note.txt",
+   "numLines": 1,
+   "startLine": 1,
+   "totalLines": 1
+  },
+  "type": "text"
+ },
+ "tool_use_id": "toolu_01RGX6GiRHL2buRqMJcNM5xz",
+ "transcript_path": "/Users/USER/.claude/projects/-private-var-folders-p2-xpfv5y4n1q9gmxzf52f5q3l40000gn-T-tmp-gOyhlOEkeJ/5668ec28-8187-4443-bfc9-b89bf23120bc.jsonl"
+}
