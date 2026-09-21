@@ -383,7 +383,9 @@ def test_validate_answers_accepts_typed_answers() -> None:
     "answers",
     [{}, {"a": {"type": "noul", "noul": 1.7}}, {"a": {"type": "choice", "choice": "x"}}],
 )
-def test_validate_answers_rejects_missing_out_of_range_or_wrong_type(answers: dict[str, object]) -> None:
+def test_validate_answers_rejects_missing_out_of_range_or_wrong_type(
+    answers: dict[str, object],
+) -> None:
     with pytest.raises(ValueError):
         sj.validate_answers({"answers": answers}, {"a": {"type": "noul"}})
 
@@ -395,8 +397,15 @@ def test_pick_ca_bundle_returns_first_existing_candidate() -> None:
 
 def test_summarize_reports_percentiles_and_distinct_models() -> None:
     samples = [
-        sj.Sample(conn_ms=10.0 * i, infer_ms=100.0 * i, total_ms=110.0 * i, status=200,
-                  model_returned="m", input_tokens=1200, error=None)
+        sj.Sample(
+            conn_ms=10.0 * i,
+            infer_ms=100.0 * i,
+            total_ms=110.0 * i,
+            status=200,
+            model_returned="m",
+            input_tokens=1200,
+            error=None,
+        )
         for i in range(1, 11)
     ]
     summary = sj.summarize(samples)
@@ -467,10 +476,16 @@ class Sample:
 
 
 PROVIDERS: dict[str, Provider] = {
-    "openrouter": Provider("openrouter", "openrouter.ai", "/api/v1/systemone",
-                           "OPENROUTER_API_KEY", "typesafe/jev-1.13-20260917"),
-    "typesafe": Provider("typesafe", "api.typesafe.ai", "/v1/systemone",
-                         "TYPESAFE_API_KEY", "jev-1.13.0"),
+    "openrouter": Provider(
+        "openrouter",
+        "openrouter.ai",
+        "/api/v1/systemone",
+        "OPENROUTER_API_KEY",
+        "typesafe/jev-1.13-20260917",
+    ),
+    "typesafe": Provider(
+        "typesafe", "api.typesafe.ai", "/v1/systemone", "TYPESAFE_API_KEY", "jev-1.13.0"
+    ),
 }
 
 
@@ -510,8 +525,14 @@ def _questions(n_questions: int) -> dict[str, dict[str, object]]:
 def build_payload(model: str, state_tokens: int, n_questions: int) -> dict[str, object]:
     base_steps = [
         {"seq": 1, "tool": "Edit", "command": "src/parser.py", "status": "ok"},
-        {"seq": 2, "tool": "Bash", "command": "npm test", "status": "error", "exit_code": 1,
-         "resolved_later": False},
+        {
+            "seq": 2,
+            "tool": "Bash",
+            "command": "npm test",
+            "status": "error",
+            "exit_code": 1,
+            "resolved_later": False,
+        },
     ]
     filler = {"tool": "Bash", "command": "git status --short", "status": "ok"}
     state: dict[str, object] = {}
@@ -561,16 +582,25 @@ def percentile(values: Sequence[float], pct: float) -> float:
     return ordered[rank - 1]
 
 
-def call_once(provider: Provider, payload: Mapping[str, object], key: str, timeout_s: float,
-              context: ssl.SSLContext) -> Sample:
+def call_once(
+    provider: Provider,
+    payload: Mapping[str, object],
+    key: str,
+    timeout_s: float,
+    context: ssl.SSLContext,
+) -> Sample:
     body = json.dumps(payload).encode()
     start = time.perf_counter()
     try:
         conn = http.client.HTTPSConnection(provider.host, timeout=timeout_s, context=context)
         conn.connect()
         connected = time.perf_counter()
-        conn.request("POST", provider.path, body=body, headers={
-            "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+        conn.request(
+            "POST",
+            provider.path,
+            body=body,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        )
         response = conn.getresponse()
         raw = response.read()
         done = time.perf_counter()
@@ -580,8 +610,15 @@ def call_once(provider: Provider, payload: Mapping[str, object], key: str, timeo
         return Sample(0.0, 0.0, elapsed, 0, None, None, type(exc).__name__)
     conn_ms, infer_ms = (connected - start) * 1000, (done - connected) * 1000
     if response.status != 200:
-        return Sample(conn_ms, infer_ms, conn_ms + infer_ms, response.status, None, None,
-                      f"http_{response.status}")
+        return Sample(
+            conn_ms,
+            infer_ms,
+            conn_ms + infer_ms,
+            response.status,
+            None,
+            None,
+            f"http_{response.status}",
+        )
     try:
         parsed = json.loads(raw)
         questions = payload["questions"]
@@ -590,16 +627,26 @@ def call_once(provider: Provider, payload: Mapping[str, object], key: str, timeo
     except (ValueError, AssertionError) as exc:
         return Sample(conn_ms, infer_ms, conn_ms + infer_ms, 200, None, None, f"invalid: {exc}")
     usage = parsed.get("usage") or {}
-    return Sample(conn_ms, infer_ms, conn_ms + infer_ms, 200, parsed.get("model"),
-                  usage.get("input_tokens"), None)
+    return Sample(
+        conn_ms,
+        infer_ms,
+        conn_ms + infer_ms,
+        200,
+        parsed.get("model"),
+        usage.get("input_tokens"),
+        None,
+    )
 
 
 def summarize(samples: Sequence[Sample]) -> dict[str, object]:
     ok = [s for s in samples if s.error is None]
+
     def spread(values: Sequence[float]) -> dict[str, float]:
         return {f"p{p}": round(percentile(values, p), 1) for p in (50, 90, 99)}
+
     summary: dict[str, object] = {
-        "n": len(samples), "n_ok": len(ok),
+        "n": len(samples),
+        "n_ok": len(ok),
         "errors": sorted({s.error for s in samples if s.error is not None}),
         "models_returned": sorted({s.model_returned for s in ok if s.model_returned}),
     }
@@ -607,8 +654,7 @@ def summarize(samples: Sequence[Sample]) -> dict[str, object]:
         summary["conn_ms"] = spread([s.conn_ms for s in ok])
         summary["infer_ms"] = spread([s.infer_ms for s in ok])
         summary["total_ms"] = spread([s.total_ms for s in ok])
-        summary["input_tokens_median"] = percentile(
-            [float(s.input_tokens or 0) for s in ok], 50)
+        summary["input_tokens_median"] = percentile([float(s.input_tokens or 0) for s in ok], 50)
     return summary
 
 
@@ -616,15 +662,24 @@ def run_provider(provider: Provider, args: argparse.Namespace, key: str) -> dict
     payload = build_payload(provider.model, args.state_tokens, args.questions)
     context = build_ssl_context()
     samples = [call_once(provider, payload, key, args.timeout, context) for _ in range(args.n)]
-    return {"provider": provider.name, "model_requested": provider.model,
-            "summary": summarize(samples), "samples": [asdict(s) for s in samples]}
+    return {
+        "provider": provider.name,
+        "model_requested": provider.model,
+        "summary": summarize(samples),
+        "samples": [asdict(s) for s in samples],
+    }
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n", type=int, default=30)
-    parser.add_argument("--provider", action="append", choices=sorted(PROVIDERS), default=None,
-                        help="repeatable; each provider gets the full sweep")
+    parser.add_argument(
+        "--provider",
+        action="append",
+        choices=sorted(PROVIDERS),
+        default=None,
+        help="repeatable; each provider gets the full sweep",
+    )
     parser.add_argument("--questions", type=int, default=6)
     parser.add_argument("--state-tokens", type=int, default=1200)
     parser.add_argument("--timeout", type=float, default=10.0)
@@ -647,15 +702,27 @@ def main(argv: list[str] | None = None) -> int:
     if not results:
         print("no provider had an API key; nothing measured", file=sys.stderr)
         return 2
-    report = {"date": dt.date.today().isoformat(), "n": args.n, "questions": args.questions,
-              "state_tokens": args.state_tokens, "results": results}
+    report = {
+        "date": dt.date.today().isoformat(),
+        "n": args.n,
+        "questions": args.questions,
+        "state_tokens": args.state_tokens,
+        "results": results,
+    }
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out_path = args.out_dir / f"m0-{report['date']}.json"
     out_path.write_text(json.dumps(report, indent=1))
     p90s = [r["summary"]["total_ms"]["p90"] for r in results if "total_ms" in r["summary"]]
     if args.json:
-        print(json.dumps({**report, "results": [{k: v for k, v in r.items() if k != "samples"}
-                                                for r in results]}, indent=1))
+        print(
+            json.dumps(
+                {
+                    **report,
+                    "results": [{k: v for k, v in r.items() if k != "samples"} for r in results],
+                },
+                indent=1,
+            )
+        )
     for r in results:
         print(f"{r['provider']}: {r['summary']}", file=sys.stderr)
     print(f"wrote {out_path}", file=sys.stderr)
@@ -738,8 +805,10 @@ import process_fixtures as pf
 
 def test_sanitize_replaces_home_prefix_everywhere() -> None:
     raw = {"cwd": "/Users/alice/proj", "nested": ["/Users/alice/.claude/x.jsonl", 3]}
-    assert pf.sanitize(raw, "/Users/alice") == {"cwd": "/Users/USER/proj",
-                                                "nested": ["/Users/USER/.claude/x.jsonl", 3]}
+    assert pf.sanitize(raw, "/Users/alice") == {
+        "cwd": "/Users/USER/proj",
+        "nested": ["/Users/USER/.claude/x.jsonl", 3],
+    }
 
 
 def test_sanitize_truncates_long_strings_and_keeps_both_ends() -> None:
@@ -756,7 +825,10 @@ def test_sanitize_does_not_mutate_its_input() -> None:
 
 
 def test_fixture_name_uses_event_and_tool() -> None:
-    assert pf.fixture_name({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash"}) == "post_tool_use_failure_bash"
+    assert (
+        pf.fixture_name({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash"})
+        == "post_tool_use_failure_bash"
+    )
     assert pf.fixture_name({"hook_event_name": "Stop"}) == "stop"
 ```
 
@@ -824,10 +896,14 @@ def main() -> int:
         out_path = OUT_DIR / f"{name}.json"
         out_path.write_text(json.dumps(sanitize(payload, home), indent=1, sort_keys=True) + "\n")
         written[name] = out_path
-    lines = ["# Fixture provenance", "",
-             f"Captured {dt.date.today().isoformat()} with `{claude_version()}` by `make capture-fixtures`.",
-             "Payloads are real hook stdin, sanitized by `scripts/process_fixtures.py`.", "",
-             *[f"- `{path.name}`" for path in written.values()]]
+    lines = [
+        "# Fixture provenance",
+        "",
+        f"Captured {dt.date.today().isoformat()} with `{claude_version()}` by `make capture-fixtures`.",
+        "Payloads are real hook stdin, sanitized by `scripts/process_fixtures.py`.",
+        "",
+        *[f"- `{path.name}`" for path in written.values()],
+    ]
     (OUT_DIR / "PROVENANCE.md").write_text("\n".join(lines) + "\n")
     print(f"wrote {len(written)} fixtures")
     return 0
@@ -848,8 +924,16 @@ import json
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent / "fixtures/hooks"
-EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-          "PostToolUseFailure", "Stop", "SubagentStop", "SessionEnd"]
+EVENTS = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Stop",
+    "SubagentStop",
+    "SessionEnd",
+]
 
 
 def _payloads() -> list[dict[str, object]]:
