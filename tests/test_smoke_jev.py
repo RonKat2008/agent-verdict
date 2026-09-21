@@ -174,8 +174,22 @@ def test_gate_passes_for_thirty_fast_successes_with_the_pinned_id() -> None:
     assert ok is True, reason
 
 
-def test_gate_accepts_openrouter_canonical_slug_as_a_substring_match() -> None:
+def test_gate_fails_when_returned_model_id_is_a_superstring_of_the_pinned_id() -> None:
+    summary = _summary(n=30, n_ok=30, models_returned=["jev-1.13.0-preview"], p90=8.0)
+    ok, reason = sj.gate_passes(summary, "jev-1.13.0", max_p90_ms=1200.0)
+    assert ok is False
+    assert "match" in reason
+
+
+def test_gate_fails_when_returned_model_id_is_a_substring_of_the_pinned_id() -> None:
     summary = _summary(n=30, n_ok=30, models_returned=["jev-1.13-20260917"], p90=8.0)
+    ok, reason = sj.gate_passes(summary, "typesafe/jev-1.13-20260917", max_p90_ms=1200.0)
+    assert ok is False
+    assert "match" in reason
+
+
+def test_gate_passes_when_returned_model_id_exactly_equals_the_pinned_id() -> None:
+    summary = _summary(n=30, n_ok=30, models_returned=["typesafe/jev-1.13-20260917"], p90=8.0)
     ok, reason = sj.gate_passes(summary, "typesafe/jev-1.13-20260917", max_p90_ms=1200.0)
     assert ok is True, reason
 

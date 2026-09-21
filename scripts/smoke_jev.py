@@ -172,8 +172,8 @@ def gate_passes(
 
     Fails on a low ok-ratio (one lucky call must not pass the gate), on
     anything but exactly one distinct returned model id, on a returned
-    model id that does not match the requested one, or on a p90 above the
-    budget. Never mutates ``summary``.
+    model id that does not exactly equal the requested one, or on a p90
+    above the budget. Never mutates ``summary``.
     """
     n, n_ok = summary.get("n"), summary.get("n_ok")
     if not isinstance(n, int) or not isinstance(n_ok, int) or n == 0:
@@ -185,7 +185,7 @@ def gate_passes(
     if not isinstance(models_returned, list) or len(models_returned) != 1:
         return False, f"expected exactly one returned model id, got {models_returned!r}"
     returned_id = models_returned[0]
-    if not (returned_id in model_requested or model_requested in returned_id):
+    if returned_id != model_requested:
         return False, f"returned model {returned_id!r} does not match requested {model_requested!r}"
     total_ms = summary.get("total_ms")
     if not isinstance(total_ms, dict):
