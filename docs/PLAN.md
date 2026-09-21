@@ -162,7 +162,7 @@ Common fields on every row: `schema_v`, `ts`, `event`, `session_id`, `prompt_id`
 |---|---|
 | `session_start` | `source`, `model` (optional), `cwd_hash`, `cc_effort` |
 | `prompt` | `prompt_excerpt` (redacted, at most 1,500 tokens), `redaction_hits` |
-| `pre` | `tool_use_id`, `tool_name`, `rule_id`, `decision` (`deny`, `ask`, or null), `never_send` (bool) |
+| `pre` | `tool_use_id`, `tool_name`, `rule_id`, `decision` (`deny`, `ask`, or null), `never_send` (bool). A `pre` row with no matching `post` or `post_fail` row means the call was denied or never ran (G15). It is never counted as a failure. |
 | `post` | `tool_use_id`, `tool_name`, `input_excerpt` (redacted, at most 300 chars), `out_head` and `out_tail` (redacted, at most 4,096 chars each), `raw_bytes`, `duration_ms`, `is_check` (command matches the runner set), `soft_fail_candidate`, `mcp_server` (`name`, `source`), `redaction_hits`, `sanitized_chars` |
 | `post_fail` | `tool_use_id`, `tool_name`, `input_excerpt`, `status: "error"`, `exit_code` (int or null), `is_interrupt`, `error_excerpt` (first 300 plus last 2,000 chars, redacted), `duration_ms` |
 | `stop`, `subagent_stop` | `stop_hook_active`, `final_message_excerpt` (redacted, at most 2,000 tokens), `claims[]`, `background_tasks_n`, `gate_reason` (from M2), `arm` (M6 only) |

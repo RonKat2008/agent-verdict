@@ -2,7 +2,7 @@
 
 A Claude Code plugin that catches an agent claiming success its own tool results do not support. It records tool outcomes (including exit codes) from lifecycle hooks, asks TypeSafe's Jev model one batch of typed questions about the final message at Stop time, and applies a versioned policy: pass, flag, or block the stop. It also ships the labeling and evaluation tools behind a published, reproducible calibration study.
 
-**Status (2026-09-20): the owner confirmed `docs/PLAN.md` and every default open decision (D-022). Milestone M0 is in progress.** The OpenRouter key arrives later, so gate G0.2 stays open until it does. Update this line whenever a milestone is tagged.
+**Status (2026-09-20): the owner confirmed `docs/PLAN.md` and every default open decision (D-022). Milestone M0 is built and reviewed on branch `m0`; only gate G0.2 (provider benchmark) is open, waiting for the owner's OpenRouter key. Do not tag `m0` until it passes.** Update this line whenever a milestone is tagged.
 
 ## Read first, in this order of authority
 
@@ -67,6 +67,7 @@ A Claude Code plugin that catches an agent claiming success its own tool results
 | `PostToolUseFailure` can only add context | It also honors `decision: "block"` with a `reason`, delivered as a tool error. | A2 |
 | 14-day retention from day one | 45 days during the study; never prune unlabeled corpus sessions. | D-021 |
 | First Jev Stop hook | jev-belay shipped first. Credit it and use it as a baseline. No "first" or "only". | F1 |
+| A `pre` row without a `post` row is a failed step | Hook-denied calls fire no Post event at all. Treat orphan pre rows as denied or unknown. | G15 |
 
 ## Architecture in brief
 
