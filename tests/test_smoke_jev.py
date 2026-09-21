@@ -1,4 +1,6 @@
+import http.client
 import json
+import time
 from collections.abc import Mapping
 
 import pytest
@@ -116,6 +118,14 @@ def test_sample_from_body_rejects_non_json_body() -> None:
     assert sample.error is not None and sample.error.startswith("invalid")
 
 
+def test_sample_from_body_uses_fixed_message_for_invalid_json_never_response_content() -> None:
+    payload = sj.build_payload("m", state_tokens=50, n_questions=1)
+    raw = b"this is definitely not json and contains a SECRET_TOKEN_VALUE fragment"
+    sample = sj._sample_from_body(raw, payload, 1.0, 2.0)
+    assert sample.error == "invalid: JSONDecodeError"
+    assert "SECRET_TOKEN_VALUE" not in (sample.error or "")
+
+
 def test_sample_from_body_rejects_dict_with_non_dict_usage() -> None:
     payload = sj.build_payload("m", state_tokens=50, n_questions=1)
     body = _valid_answers_body(payload)
@@ -123,3 +133,107 @@ def test_sample_from_body_rejects_dict_with_non_dict_usage() -> None:
     sample = sj._sample_from_body(json.dumps(body).encode(), payload, 1.0, 2.0)
     assert sample.status == 200
     assert sample.error is not None and sample.error.startswith("invalid")
+
+
+def _summary(
+    n: int,
+    n_ok: int,
+    models_returned: list[str],
+    p90: float | None = None,
+) -> dict[str, object]:
+    summary: dict[str, object] = {"n": n, "n_ok": n_ok, "models_returned": models_returned}
+    if p90 is not None:
+        summary["total_ms"] = {"p50": p90, "p90": p90, "p99": p90}
+    return summary
+
+
+def test_gate_fails_when_almost_every_call_errored() -> None:
+    summary = _summary(n=30, n_ok=1, models_returned=["jev-1.13.0"], p90=5.0)
+    ok, reason = sj.gate_passes(summary, "jev-1.13.0", max_p90_ms=1200.0)
+    assert ok is False
+    assert "ratio" in reason
+
+
+def test_gate_fails_when_two_distinct_models_are_returned() -> None:
+    summary = _summary(n=2, n_ok=2, models_returned=["model-a", "model-b"], p90=5.0)
+    ok, reason = sj.gate_passes(summary, "jev-1.13.0", max_p90_ms=1200.0)
+    assert ok is False
+    assert "model" in reason
+
+
+def test_gate_fails_when_returned_model_id_does_not_match_requested() -> None:
+    summary = _summary(n=1, n_ok=1, models_returned=["totally-different-id"], p90=5.0)
+    ok, reason = sj.gate_passes(summary, "jev-1.13.0", max_p90_ms=1200.0)
+    assert ok is False
+    assert "match" in reason
+
+
+def test_gate_passes_for_thirty_fast_successes_with_the_pinned_id() -> None:
+    summary = _summary(n=30, n_ok=30, models_returned=["jev-1.13.0"], p90=8.0)
+    ok, reason = sj.gate_passes(summary, "jev-1.13.0", max_p90_ms=1200.0)
+    assert ok is True, reason
+
+
+def test_gate_accepts_openrouter_canonical_slug_as_a_substring_match() -> None:
+    summary = _summary(n=30, n_ok=30, models_returned=["jev-1.13-20260917"], p90=8.0)
+    ok, reason = sj.gate_passes(summary, "typesafe/jev-1.13-20260917", max_p90_ms=1200.0)
+    assert ok is True, reason
+
+
+def test_gate_fails_when_p90_exceeds_the_max() -> None:
+    summary = _summary(n=30, n_ok=30, models_returned=["jev-1.13.0"], p90=5000.0)
+    ok, reason = sj.gate_passes(summary, "jev-1.13.0", max_p90_ms=1200.0)
+    assert ok is False
+    assert "p90" in reason
+
+
+def test_gate_respects_a_custom_min_ok_ratio() -> None:
+    summary = _summary(n=10, n_ok=9, models_returned=["jev-1.13.0"], p90=8.0)
+    ok, _ = sj.gate_passes(summary, "jev-1.13.0", max_p90_ms=1200.0, min_ok_ratio=0.95)
+    assert ok is False
+    ok, _ = sj.gate_passes(summary, "jev-1.13.0", max_p90_ms=1200.0, min_ok_ratio=0.85)
+    assert ok is True
+
+
+class _FakeResponse:
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status = status
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+
+class _FakeHTTPSConnection:
+    def __init__(self, host: str, timeout: float | None = None, context: object = None) -> None:
+        del host, timeout, context
+
+    def connect(self) -> None:
+        pass
+
+    def request(
+        self, method: str, path: str, body: bytes | None = None, headers: object = None
+    ) -> None:
+        del method, path, body, headers
+
+    def getresponse(self) -> _FakeResponse:
+        return _FakeResponse(200, b"not valid json")
+
+    def close(self) -> None:
+        pass
+
+
+def test_conn_ms_excludes_payload_serialization_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_dumps = json.dumps
+
+    def slow_dumps(*args: object, **kwargs: object) -> str:
+        time.sleep(0.05)
+        return real_dumps(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(json, "dumps", slow_dumps)
+    monkeypatch.setattr(http.client, "HTTPSConnection", _FakeHTTPSConnection)
+    provider = sj.PROVIDERS["typesafe"]
+    payload = sj.build_payload(provider.model, state_tokens=50, n_questions=1)
+    context = sj.build_ssl_context()
+    sample = sj.call_once(provider, payload, "fake-key", 10.0, context)
+    assert sample.conn_ms < 25.0

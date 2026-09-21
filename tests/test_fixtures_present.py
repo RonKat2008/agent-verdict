@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent / "fixtures/hooks"
@@ -38,6 +39,28 @@ def test_fixtures_contain_no_real_home_path() -> None:
     fixture_files = list(HOOKS.glob("*.json"))
     assert fixture_files, "expected at least one captured fixture file"
     assert all(home not in p.read_text() for p in fixture_files)
+
+
+# Matches a `/Users/<name>` or `/home/<name>` path whose <name> is anything
+# other than the sanitized placeholder `USER`. A hit here means a real
+# username leaked into a fixture (or the test itself needs to accommodate
+# a legitimate non-placeholder path, e.g. `/Users/Shared`, explicitly).
+_NON_PLACEHOLDER_HOME_PATH = re.compile(r"/(Users|home)/(?!USER\b)[A-Za-z0-9._-]+")
+
+
+def test_fixtures_use_the_sanitized_user_placeholder_not_a_real_username() -> None:
+    fixture_files = list(HOOKS.glob("*.json"))
+    assert fixture_files, "expected at least one captured fixture file"
+    texts = {p: p.read_text() for p in fixture_files}
+    assert any("/Users/USER" in text for text in texts.values()), (
+        "expected at least one fixture to contain the sanitized /Users/USER placeholder"
+    )
+    leaks = {p.name: _NON_PLACEHOLDER_HOME_PATH.findall(text) for p, text in texts.items()}
+    leaks = {name: matches for name, matches in leaks.items() if matches}
+    assert not leaks, (
+        f"found non-placeholder home paths in fixtures (report and fix or add a legitimate "
+        f"exception, do not weaken the regex silently): {leaks}"
+    )
 
 
 def test_pre_and_post_fixtures_for_the_same_tool_share_a_tool_use_id() -> None:

@@ -162,6 +162,40 @@ def validate_answers(body: Mapping[str, object], questions: Mapping[str, object]
             raise ValueError(f"noul {key!r} is outside [0, 1]")
 
 
+def gate_passes(
+    summary: Mapping[str, object],
+    model_requested: str,
+    max_p90_ms: float,
+    min_ok_ratio: float = 0.95,
+) -> tuple[bool, str]:
+    """Decide whether one provider's benchmark run satisfies gate G0.2.
+
+    Fails on a low ok-ratio (one lucky call must not pass the gate), on
+    anything but exactly one distinct returned model id, on a returned
+    model id that does not match the requested one, or on a p90 above the
+    budget. Never mutates ``summary``.
+    """
+    n, n_ok = summary.get("n"), summary.get("n_ok")
+    if not isinstance(n, int) or not isinstance(n_ok, int) or n == 0:
+        return False, "no samples"
+    ok_ratio = n_ok / n
+    if ok_ratio < min_ok_ratio:
+        return False, f"ok ratio {ok_ratio:.2f} ({n_ok}/{n}) below {min_ok_ratio:.2f}"
+    models_returned = summary.get("models_returned")
+    if not isinstance(models_returned, list) or len(models_returned) != 1:
+        return False, f"expected exactly one returned model id, got {models_returned!r}"
+    returned_id = models_returned[0]
+    if not (returned_id in model_requested or model_requested in returned_id):
+        return False, f"returned model {returned_id!r} does not match requested {model_requested!r}"
+    total_ms = summary.get("total_ms")
+    if not isinstance(total_ms, dict):
+        return False, "no successful samples to measure total_ms"
+    p90 = total_ms.get("p90")
+    if not isinstance(p90, int | float) or p90 > max_p90_ms:
+        return False, f"p90 {p90} ms exceeds {max_p90_ms} ms"
+    return True, f"ok ratio {ok_ratio:.2f}, model {returned_id!r}, p90 {p90} ms"
+
+
 def percentile(values: Sequence[float], pct: float) -> float:
     if not values:
         raise ValueError("percentile of empty input")
@@ -211,6 +245,11 @@ def _sample_from_body(
 ) -> Sample:
     try:
         parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return Sample(
+            conn_ms, infer_ms, conn_ms + infer_ms, 200, None, None, "invalid: JSONDecodeError"
+        )
+    try:
         questions = payload["questions"]
         assert isinstance(questions, dict)
         validate_answers(parsed, questions)
@@ -292,6 +331,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--state-tokens", type=int, default=1200)
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--max-p90-ms", type=float, default=1200.0)
+    parser.add_argument("--min-ok-ratio", type=float, default=0.95)
     parser.add_argument("--out-dir", type=Path, default=Path("docs/measurements"))
     parser.add_argument("--json", action="store_true", help="print the full report as JSON")
     return parser.parse_args(argv)
@@ -309,14 +349,18 @@ def _run_all_providers(args: argparse.Namespace) -> list[dict[str, object]]:
     return results
 
 
-def _p90_of(result: dict[str, object]) -> float | None:
-    summary = result["summary"]
-    assert isinstance(summary, dict)
-    total_ms = summary.get("total_ms")
-    if not isinstance(total_ms, dict):
-        return None
-    p90 = total_ms.get("p90")
-    return float(p90) if isinstance(p90, int | float) else None
+def _with_gates(
+    results: Sequence[Mapping[str, object]], args: argparse.Namespace
+) -> list[dict[str, object]]:
+    gated = []
+    for result in results:
+        summary = result["summary"]
+        model_requested = result["model_requested"]
+        assert isinstance(summary, dict)
+        assert isinstance(model_requested, str)
+        ok, reason = gate_passes(summary, model_requested, args.max_p90_ms, args.min_ok_ratio)
+        gated.append({**result, "gate": {"ok": ok, "reason": reason}})
+    return gated
 
 
 def _emit_report(
@@ -337,22 +381,31 @@ def _emit_report(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    results = _run_all_providers(args)
-    if not results:
+    raw_results = _run_all_providers(args)
+    if not raw_results:
         print("no provider had an API key; nothing measured", file=sys.stderr)
         return 2
+    results = _with_gates(raw_results, args)
+    any_ok = False
+    for result in results:
+        gate = result["gate"]
+        assert isinstance(gate, dict)
+        ok = bool(gate["ok"])
+        any_ok = any_ok or ok
+        print(
+            f"{result['provider']}: gate {'PASS' if ok else 'FAIL'}: {gate['reason']}",
+            file=sys.stderr,
+        )
     report = {
         "date": dt.date.today().isoformat(),
         "n": args.n,
         "questions": args.questions,
         "state_tokens": args.state_tokens,
+        "min_ok_ratio": args.min_ok_ratio,
         "results": results,
     }
     _emit_report(report, results, args)
-    p90s = [p90 for r in results if (p90 := _p90_of(r)) is not None]
-    if not p90s:
-        return 1
-    return 0 if min(p90s) <= args.max_p90_ms else 1
+    return 0 if any_ok else 1
 
 
 if __name__ == "__main__":

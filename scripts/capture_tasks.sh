@@ -5,7 +5,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 export VERDICT_CAPTURE_DIR="$root/tests/fixtures/hooks/raw"
 mkdir -p "$VERDICT_CAPTURE_DIR"
 work=$(mktemp -d)
-cd "$work" && git init -q .
+cd "$work" || { echo "failed to cd into temp working directory: $work" >&2; exit 1; }
+git init -q . || { echo "git init failed in temp working directory: $work" >&2; exit 1; }
 run() {
   claude -p "$1" --plugin-dir "$root/scripts/fixture_capture_plugin" \
     --model haiku --max-turns 8 --permission-mode acceptEdits \
