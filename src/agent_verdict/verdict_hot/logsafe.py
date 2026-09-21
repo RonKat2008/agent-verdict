@@ -1,13 +1,21 @@
 """Safe hook logging: scrub(), log_invocation(), rotation, excepthook.
 
 `hook.log` never holds tool content or key material (global-constraints.md).
-Every string written passes `scrub()`, and `log_invocation` never raises: a
-recorder crash must still exit 0 with an empty stdout (D-... fail-open model).
+Every string value passes `scrub()` *before* the row is serialized to JSON
+(never on the already-serialized line: a secret value containing a quote or
+brace would otherwise corrupt the line once redaction rewrites it in place).
+`log_invocation` never raises: a recorder crash must still exit 0 with an
+empty stdout (fail-open model).
+
+Rotation is guarded by an flock on a dedicated `hook.log.lock` file so two
+hook processes racing to rotate `hook.log` at the same size threshold cannot
+interleave or clobber `hook.log.1`.
 """
 
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -26,8 +34,19 @@ _MIN_ENV_SECRET_LEN = 8
 _MAX_LOG_BYTES = 10 * 1024 * 1024
 _FILE_MODE = 0o600
 _VALID_OUTCOMES = frozenset({"ok", "skipped", "exception", "disabled"})
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
-_AUTH_HEADER_RE = re.compile(r"(Authorization:\s*).*", re.IGNORECASE)
+# Test-only escape hatch: multiprocess rotation tests need to shrink the
+# rotation threshold in a *spawned child process*, where monkeypatching the
+# `_MAX_LOG_BYTES` module attribute in the parent has no effect. Not part of
+# the public interface.
+_TEST_MAX_LOG_BYTES_ENV = "_VERDICT_TEST_MAX_LOG_BYTES"
+
+# Bounded to the scheme token plus one credential token after "Authorization:"
+# (e.g. "Bearer <token>", or a single bare token) so a header embedded inside
+# a longer string only loses those one or two words, never the rest of the
+# text after it.
+_AUTH_HEADER_RE = re.compile(r"(Authorization:\s*)\S+(?:\s+\S+)?", re.IGNORECASE)
 _SK_TOKEN_RE = re.compile(r"sk-[A-Za-z0-9_-]{16,}")
 
 
@@ -47,6 +66,25 @@ def scrub(text: str) -> str:
     result = _AUTH_HEADER_RE.sub(lambda m: m.group(1) + _REDACTED, result)
     result = _SK_TOKEN_RE.sub(_REDACTED, result)
     return result
+
+
+def _scrub_value(value: object) -> object:
+    """Recursively scrub string leaves. Returns new objects; never mutates."""
+    if isinstance(value, str):
+        return scrub(value)
+    if isinstance(value, dict):
+        return {key: _scrub_value(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_value(item) for item in value]
+    return value
+
+
+def _max_log_bytes() -> int:
+    override = os.environ.get(_TEST_MAX_LOG_BYTES_ENV)
+    if override:
+        with contextlib.suppress(ValueError):
+            return int(override)
+    return _MAX_LOG_BYTES
 
 
 def log_invocation(
@@ -81,27 +119,54 @@ def _log_invocation_unsafe(
     if extra:
         row.update(extra)
 
-    line = scrub(json.dumps(row, separators=(",", ":"), ensure_ascii=False)) + "\n"
+    # Scrub the row's own Python values before serializing. Scrubbing the
+    # already-serialized JSON text would let a secret's replacement text
+    # (or a bounded-but-imperfect match) land across a closing quote or
+    # brace and corrupt the line; scrubbing first means json.dumps always
+    # serializes already-safe strings.
+    scrubbed_row = _scrub_value(row)
+    line = json.dumps(scrubbed_row, separators=(",", ":"), ensure_ascii=False) + "\n"
+
     log_path = paths.hook_log()
-    _rotate_if_needed(log_path)
+    _rotate_and_append(log_path, line.encode("utf-8"))
 
-    fd = os.open(str(log_path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, _FILE_MODE)
+
+def _lock_path(log_path: Path) -> Path:
+    return log_path.with_name(log_path.name + ".lock")
+
+
+def _rotate_and_append(log_path: Path, data: bytes) -> None:
+    lock_fd = os.open(str(_lock_path(log_path)), os.O_WRONLY | os.O_CREAT | _NOFOLLOW, _FILE_MODE)
     try:
-        os.fchmod(fd, _FILE_MODE)
-        os.write(fd, line.encode("utf-8"))
+        os.fchmod(lock_fd, _FILE_MODE)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            _rotate_if_over_limit(log_path)
+            _append_line(log_path, data)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
     finally:
-        os.close(fd)
+        os.close(lock_fd)
 
 
-def _rotate_if_needed(log_path: Path) -> None:
+def _rotate_if_over_limit(log_path: Path) -> None:
     try:
         size = log_path.stat().st_size
     except OSError:
         return
-    if size <= _MAX_LOG_BYTES:
+    if size <= _max_log_bytes():
         return
     rotated = log_path.with_name(log_path.name + ".1")
     os.replace(log_path, rotated)
+
+
+def _append_line(log_path: Path, data: bytes) -> None:
+    fd = os.open(str(log_path), os.O_WRONLY | os.O_APPEND | os.O_CREAT | _NOFOLLOW, _FILE_MODE)
+    try:
+        os.fchmod(fd, _FILE_MODE)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
 
 
 def install_excepthook() -> None:

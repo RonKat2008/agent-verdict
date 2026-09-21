@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -211,3 +212,71 @@ def test_16_processes_append_500_rows_without_interleaving(
     for pid in range(n_procs):
         for n in range(counts[pid]):
             assert (pid, n) in seen, f"missing row pid={pid} n={n}"
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="platform lacks O_NOFOLLOW")
+def test_append_row_refuses_a_symlinked_session_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERDICT_HOME", str(tmp_path))
+    decoy = tmp_path / "decoy.txt"
+    decoy.write_text("original content", encoding="utf-8")
+
+    target = paths.session_file("evil")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.symlink_to(decoy)
+
+    with pytest.raises(OSError):
+        ledger.append_row(_row("session_end", "evil", reason="clear"))
+
+    assert decoy.read_text(encoding="utf-8") == "original content"
+    assert target.is_symlink()
+
+
+def test_needs_spool_reads_only_the_first_line_of_a_large_session_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERDICT_HOME", str(tmp_path))
+    target = paths.session_file("big")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    with target.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"schema_v": 1, "event": "session_start", "session_id": "big"}) + "\n")
+        padding_line = ("x" * 1000) + "\n"
+        for _ in range(6 * 1024):  # ~6 MB of padding after the first line
+            fh.write(padding_line)
+
+    assert target.stat().st_size > 5 * 1024 * 1024
+
+    read_total = 0
+    real_fdopen = os.fdopen
+
+    def counting_fdopen(fd: int, *args: Any, **kwargs: Any) -> Any:
+        fh = real_fdopen(fd, *args, **kwargs)
+        real_readline = fh.readline
+        real_read = fh.read
+
+        def counting_readline(*a: Any, **kw: Any) -> str:
+            nonlocal read_total
+            chunk: str = real_readline(*a, **kw)
+            read_total += len(chunk)
+            return chunk
+
+        def counting_read(*a: Any, **kw: Any) -> str:
+            nonlocal read_total
+            chunk: str = real_read(*a, **kw)
+            read_total += len(chunk)
+            return chunk
+
+        fh.readline = counting_readline
+        fh.read = counting_read
+        return fh
+
+    monkeypatch.setattr(os, "fdopen", counting_fdopen)
+
+    ledger.append_row(_row("post", "big"))
+
+    assert read_total < 2 * 1024 * 1024, (
+        f"append_row read {read_total} bytes from a 5+MB session file; "
+        "expected a bounded first-line read, not the whole file"
+    )

@@ -54,13 +54,36 @@ def test_appended_file_is_0600_under_permissive_umask(
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
-@pytest.mark.parametrize("bad_id", ["../x", "", "a/b", "a\\b", "a\x00b", ".."])
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "../x",
+        "",
+        "a/b",
+        "a\\b",
+        "a\x00b",
+        "..",
+        "a\nb",
+        "a\rb",
+        ".hidden",
+        "x" * 129,
+    ],
+)
 def test_session_file_rejects_bad_ids(
     bad_id: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("VERDICT_HOME", str(tmp_path))
     with pytest.raises(ValueError):
         paths.session_file(bad_id)
+
+
+def test_session_file_accepts_a_128_char_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERDICT_HOME", str(tmp_path))
+    session_id = "x" * 128
+    target = paths.session_file(session_id)
+    assert target.name == f"{session_id}.jsonl"
 
 
 def test_session_file_accepts_a_plain_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,3 +95,46 @@ def test_session_file_accepts_a_plain_id(tmp_path: Path, monkeypatch: pytest.Mon
 def test_hook_log_path_is_under_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VERDICT_HOME", str(tmp_path))
     assert paths.hook_log() == tmp_path / "hook.log"
+
+
+def test_ensure_private_dir_refuses_a_symlinked_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERDICT_HOME", str(tmp_path / "home"))
+    home = paths.verdict_home()
+    home.mkdir(parents=True)
+    real_elsewhere = tmp_path / "elsewhere"
+    real_elsewhere.mkdir()
+    (home / "events").symlink_to(real_elsewhere)
+
+    with pytest.raises(ValueError):
+        paths.events_dir()
+
+
+def test_ensure_private_dir_refuses_a_symlinked_pending_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERDICT_HOME", str(tmp_path / "home"))
+    home = paths.verdict_home()
+    home.mkdir(parents=True)
+    real_elsewhere = tmp_path / "elsewhere2"
+    real_elsewhere.mkdir()
+    (home / "pending").symlink_to(real_elsewhere)
+
+    with pytest.raises(ValueError):
+        paths.pending_dir()
+
+
+def test_hook_log_allows_verdict_home_root_itself_to_be_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_home = tmp_path / "real_home"
+    real_home.mkdir()
+    home_link = tmp_path / "home_link"
+    home_link.symlink_to(real_home)
+    monkeypatch.setenv("VERDICT_HOME", str(home_link))
+
+    log_path = paths.hook_log()  # must not raise: the ROOT may be a symlink
+
+    assert log_path == home_link / "hook.log"
+    assert stat.S_IMODE(real_home.stat().st_mode) == 0o700

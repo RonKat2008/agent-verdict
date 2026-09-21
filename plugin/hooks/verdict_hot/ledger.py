@@ -4,6 +4,12 @@ One `os.write` per row on an `O_APPEND` descriptor held under `fcntl.flock`,
 never holding the lock across anything slow. If a session file's first row
 carries a `schema_v` newer than this code's `SCHEMA_V`, appends spool to
 `pending_dir()` instead so an older collector never corrupts a newer format.
+
+All ledger/pending files are opened with `O_NOFOLLOW` (where the platform
+defines it): the hot path never follows a symlink planted at a session file's
+path. A symlinked target simply raises `OSError` (fail-open at the recorder
+layer above this module handles that, per global-constraints.md); the file it
+points at is never touched.
 """
 
 from __future__ import annotations
@@ -19,6 +25,8 @@ from . import SCHEMA_V, paths
 
 _FILE_MODE = 0o600
 _REQUIRED_KEYS = ("session_id", "event", "schema_v")
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_FIRST_LINE_READ_CAP = 1024 * 1024  # 1 MB: bound a single pathological line
 
 
 def append_row(row: Mapping[str, object]) -> Path:
@@ -34,7 +42,7 @@ def append_row(row: Mapping[str, object]) -> Path:
     line = json.dumps(dict(row), separators=(",", ":"), ensure_ascii=False) + "\n"
     data = line.encode("utf-8")
 
-    fd = os.open(str(target), os.O_WRONLY | os.O_APPEND | os.O_CREAT, _FILE_MODE)
+    fd = os.open(str(target), os.O_WRONLY | os.O_APPEND | os.O_CREAT | _NOFOLLOW, _FILE_MODE)
     try:
         os.fchmod(fd, _FILE_MODE)
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -51,7 +59,7 @@ def read_session(session_id: str) -> list[dict[str, object]]:
     target = paths.session_file(session_id)
     rows: list[dict[str, object]] = []
     try:
-        text = target.read_text(encoding="utf-8")
+        text = _read_text_no_follow(target)
     except OSError:
         return rows
     for line in _split_lines(text):
@@ -74,13 +82,31 @@ def _needs_spool(target: Path) -> bool:
 
 
 def _first_row(target: Path) -> dict[str, object] | None:
+    """Read only the session file's first line (capped), not the whole file.
+
+    Every append calls this to decide whether to spool, so reading the whole
+    file here would make each append O(file size): quadratic over a session.
+    """
     try:
-        text = target.read_text(encoding="utf-8")
+        line = _read_first_line_no_follow(target)
     except OSError:
         return None
-    for line in _split_lines(text):
-        return _try_parse_object(line)
-    return None
+    line = line.rstrip("\r\n").strip()
+    if not line:
+        return None
+    return _try_parse_object(line)
+
+
+def _read_text_no_follow(path: Path) -> str:
+    fd = os.open(str(path), os.O_RDONLY | _NOFOLLOW)
+    with os.fdopen(fd, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _read_first_line_no_follow(path: Path) -> str:
+    fd = os.open(str(path), os.O_RDONLY | _NOFOLLOW)
+    with os.fdopen(fd, "r", encoding="utf-8") as fh:
+        return fh.readline(_FIRST_LINE_READ_CAP)
 
 
 def _split_lines(text: str) -> Iterator[str]:
