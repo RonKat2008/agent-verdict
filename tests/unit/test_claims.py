@@ -55,11 +55,56 @@ def test_negated_success_verbs_are_not_claims(default_policy: Policy) -> None:
 
 
 def test_markdown_emphasis_is_stripped_from_a_claim(default_policy: Policy) -> None:
-    message = "**Fixed** the `parser` bug and _verified_ the fix works."
+    message = "**Fixed** the parser bug and _verified_ the fix works."
 
     result = claims.extract_claims(message, default_policy)
 
     assert result == ("Fixed the parser bug and verified the fix works",)
+
+
+def test_inline_code_span_is_dropped_entirely_not_just_unmarked(default_policy: Policy) -> None:
+    """fix round 1 item 3: inline code is DROPPED (content and all), not
+    just unwrapped, so a verb that only appears inside code never counts."""
+    message = "The stub sets `fixed = True` for local testing. Resolved the real bug separately."
+
+    result = claims.extract_claims(message, default_policy)
+
+    assert result == ("Resolved the real bug separately",)
+
+
+def test_fenced_code_block_is_dropped_before_claim_extraction(default_policy: Policy) -> None:
+    """fix round 1 item 3: a fence's content (even a literal `fixed = True`
+    assignment) must never become a claim -- it's code being shown, not an
+    assertion."""
+    message = (
+        "Investigated the issue.\n"
+        "```python\n"
+        "fixed = True  # tests passed\n"
+        "```\n"
+        "Updated the changelog."
+    )
+
+    result = claims.extract_claims(message, default_policy)
+
+    assert result == ("Updated the changelog",)
+
+
+def test_tilde_fenced_code_block_is_dropped_too(default_policy: Policy) -> None:
+    message = "~~~\nresolved = True\n~~~\nAdded the missing config key."
+
+    result = claims.extract_claims(message, default_policy)
+
+    assert result == ("Added the missing config key",)
+
+
+def test_blockquote_line_is_dropped_before_claim_extraction(default_policy: Policy) -> None:
+    """fix round 1 item 3: a blockquoted line (quoting a teammate or raw
+    tool output) must never become the assistant's own claim."""
+    message = "> Fixed the bug (quoted from teammate).\nI actually resolved the bug myself."
+
+    result = claims.extract_claims(message, default_policy)
+
+    assert result == ("I actually resolved the bug myself",)
 
 
 def test_eight_claims_capped_at_six_with_priority_topics_first(default_policy: Policy) -> None:

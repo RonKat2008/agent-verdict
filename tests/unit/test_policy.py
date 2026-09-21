@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import statistics
 import subprocess
 import sys
 from pathlib import Path
@@ -143,71 +144,62 @@ def test_load_policy_never_compiles_a_policy_supplied_pattern(tmp_path: Path) ->
     assert proc.stdout.strip() == "ok"
 
 
-@pytest.mark.slow
-@pytest.mark.skipif(not SYSTEM_PYTHON39.exists(), reason="no system Python 3.9 at /usr/bin/python3")
-def test_import_and_load_policy_incremental_under_10ms(tmp_path: Path) -> None:
-    """task-3-brief.md's <10ms budget, measured the way it is actually paid.
+_TARGET_SCRIPT = (
+    "import sys; sys.path.insert(0, 'plugin/hooks'); "
+    "import time; t0 = time.perf_counter(); "
+    "import verdict_hot.policy, verdict_hot.gates, verdict_hot.claims; "
+    "verdict_hot.policy.load_policy(); "
+    "print((time.perf_counter() - t0) * 1000)"
+)
+_BASELINE_SCRIPT = (
+    "import time; t0 = time.perf_counter(); "
+    "import json, os, re, sys; "
+    "print((time.perf_counter() - t0) * 1000)"
+)
 
-    Importing `dataclasses` for the first time on CPython 3.9 unconditionally
-    pulls in `inspect` (and `ast`/`dis`/`tokenize` beneath it) -- roughly
-    20ms on a cold `/usr/bin/python3 -S` process, confirmed with `-X
-    importtime`. `Policy` (this brief) and Task 4's `HookEvent` types both
-    need a frozen dataclass tree, so in the real M1 pipeline `dataclasses`
-    is paid for once by whichever hot-path module imports it first, before
-    `policy.py` ever runs -- see
-    `test_import_and_load_policy_in_isolation_reports_actual_cost` below for
-    the one-time cost measured with nothing pre-imported. This test
-    pre-imports the same stdlib modules the rest of the hot tree already
-    uses (paths/ledger/logsafe/textnorm/redact, and dataclasses/typing for
-    Task 4's parsers.py) to measure what policy+gates+claims+load_policy()
-    ADD on top of an already-warm interpreter, which is the number the
-    brief's budget is actually about.
+
+def _median_subprocess_ms(script: str, tmp_home: Path, runs: int = 12) -> float:
+    """Median wall time (ms) of `script` over `runs` fresh subprocesses.
+
+    Each run is a brand-new `/usr/bin/python3 -S` process (cold: no shared
+    import cache across runs), matching fix round 1 item 0's methodology.
     """
-    script = (
-        "import sys; sys.path.insert(0, 'plugin/hooks'); "
-        "import os, re, json, pathlib, typing, dataclasses, functools, collections.abc; "
-        "import time; t0 = time.perf_counter(); "
-        "import verdict_hot.policy, verdict_hot.gates, verdict_hot.claims; "
-        "verdict_hot.policy.load_policy(); "
-        "print((time.perf_counter() - t0) * 1000)"
-    )
-    env = {**os.environ, "VERDICT_HOME": str(tmp_path / "home")}
-    proc = subprocess.run(
-        [str(SYSTEM_PYTHON39), "-S", "-c", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        env=env,
-        check=True,
-    )
-    elapsed_ms = float(proc.stdout.strip().splitlines()[-1])
-    assert elapsed_ms < 10, f"incremental import+load took {elapsed_ms:.2f}ms >= 10ms"
+    env = {**os.environ, "VERDICT_HOME": str(tmp_home)}
+    samples = []
+    for _ in range(runs):
+        proc = subprocess.run(
+            [str(SYSTEM_PYTHON39), "-S", "-c", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=True,
+        )
+        samples.append(float(proc.stdout.strip().splitlines()[-1]))
+    return statistics.median(samples)
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(not SYSTEM_PYTHON39.exists(), reason="no system Python 3.9 at /usr/bin/python3")
-def test_import_and_load_policy_in_isolation_reports_actual_cost(tmp_path: Path) -> None:
-    """The literal brief measurement (nothing pre-imported) as a regression
-    guard, not a <10ms gate -- see the docstring above for why the first
-    `@dataclass` use in a fresh `/usr/bin/python3 -S` process alone costs
-    roughly this much, independent of anything policy.py/gates.py/claims.py
-    do. Measured (5 runs, task-3-report.md): ~26 ms steady state."""
-    script = (
-        "import sys; sys.path.insert(0, 'plugin/hooks'); "
-        "import time; t0 = time.perf_counter(); "
-        "import verdict_hot.policy, verdict_hot.gates, verdict_hot.claims; "
-        "verdict_hot.policy.load_policy(); "
-        "print((time.perf_counter() - t0) * 1000)"
+def test_import_and_load_policy_delta_under_10ms(tmp_path: Path) -> None:
+    """fix round 1 item 0 (D-028): re-measured after dropping `dataclasses`.
+
+    D-028 replaced `Policy`'s frozen dataclass tree with `typing.NamedTuple`
+    because `dataclasses` alone costs ~8ms per process on Python 3.9 (it
+    pulls in `inspect`/`ast`/`dis`/`tokenize`) -- see the (now superseded)
+    ~26ms isolated measurement in task-3-report.md's "Fix round 1" section.
+    Methodology: median of 12 cold `/usr/bin/python3 -S` subprocess runs
+    for `import verdict_hot.policy, gates, claims` + one `load_policy()`
+    call, minus the median of 12 runs importing only `json, os, re, sys`
+    (the stdlib `policy.py`/`gates.py`/`claims.py` themselves need) --
+    isolates what this task's code adds over that stdlib floor.
+    """
+    tmp_home = tmp_path / "home"
+    target_median = _median_subprocess_ms(_TARGET_SCRIPT, tmp_home)
+    baseline_median = _median_subprocess_ms(_BASELINE_SCRIPT, tmp_home)
+    delta_ms = target_median - baseline_median
+    assert delta_ms < 10, (
+        f"policy+gates+claims+load_policy() added {delta_ms:.2f}ms over the "
+        f"json/os/re/sys baseline (target median {target_median:.2f}ms, "
+        f"baseline median {baseline_median:.2f}ms) -- budget is <10ms"
     )
-    env = {**os.environ, "VERDICT_HOME": str(tmp_path / "home")}
-    proc = subprocess.run(
-        [str(SYSTEM_PYTHON39), "-S", "-c", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        env=env,
-        check=True,
-    )
-    elapsed_ms = float(proc.stdout.strip().splitlines()[-1])
-    # Generous regression guard, not the brief's <10ms figure (see docstring).
-    assert elapsed_ms < 60, f"isolated import+load took {elapsed_ms:.2f}ms >= 60ms"

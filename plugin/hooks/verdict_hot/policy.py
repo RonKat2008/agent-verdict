@@ -30,6 +30,13 @@ would mean silently running with no policy at all.
 Loading must be cheap (task-3-brief.md): this module never compiles a
 regular expression. Every `*_patterns` / `*_globs` field is kept as plain
 strings; `gates.py` and `claims.py` compile and cache lazily.
+
+D-028 (docs/DECISIONS.md; fix round 1): value types here are
+`typing.NamedTuple`, never `dataclasses` -- `dataclasses` alone costs
+about 8ms per process on Python 3.9 (it unconditionally pulls in
+`inspect`, `ast`, `dis`, `tokenize`), and `plugin/hooks/` bans it outright
+(`tests/test_import_ban.py`). `typing` is already needed here for `Any`,
+so a `NamedTuple` costs only the marginal ~3ms D-028 measured for it.
 """
 
 from __future__ import annotations
@@ -37,9 +44,8 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import paths
 
@@ -52,8 +58,7 @@ class PolicyError(Exception):
     """Raised for invalid JSON or a missing required key while loading a policy."""
 
 
-@dataclass(frozen=True)
-class StorePolicy:
+class StorePolicy(NamedTuple):
     retention_days: int
     excerpt_head: int
     excerpt_tail: int
@@ -64,34 +69,30 @@ class StorePolicy:
     final_message_max_chars: int
 
 
-@dataclass(frozen=True)
-class NeverSendPolicy:
+class NeverSendPolicy(NamedTuple):
     path_globs: tuple[str, ...]
+    path_exclude_globs: tuple[str, ...]
     bash_patterns: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class ChecksPolicy:
+class ChecksPolicy(NamedTuple):
     runner_patterns: tuple[str, ...]
     extra: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class SoftFailurePolicy:
+class SoftFailurePolicy(NamedTuple):
     output_patterns: tuple[str, ...]
     masking_patterns: tuple[str, ...]
     http_error_patterns: tuple[str, ...]
     tools: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class ClaimsPolicy:
+class ClaimsPolicy(NamedTuple):
     success_verbs: tuple[str, ...]
     max_claims: int
 
 
-@dataclass(frozen=True)
-class Policy:
+class Policy(NamedTuple):
     policy_version: str
     mode: str
     store: StorePolicy
@@ -188,6 +189,9 @@ def _build_store(raw: Mapping[str, Any]) -> StorePolicy:
 def _build_never_send(raw: Mapping[str, Any]) -> NeverSendPolicy:
     return NeverSendPolicy(
         path_globs=_str_tuple(_require(raw, "path_globs", "never_send"), "never_send.path_globs"),
+        path_exclude_globs=_str_tuple(
+            _require(raw, "path_exclude_globs", "never_send"), "never_send.path_exclude_globs"
+        ),
         bash_patterns=_str_tuple(
             _require(raw, "bash_patterns", "never_send"), "never_send.bash_patterns"
         ),

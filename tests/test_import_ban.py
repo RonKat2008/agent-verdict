@@ -3,6 +3,11 @@
 AST-walks every .py file under plugin/hooks/ and asserts every imported
 top-level module is either a relative import or a name present in
 sys.stdlib_module_names, and that no module file shadows a stdlib name.
+
+D-028 (docs/DECISIONS.md): `dataclasses` is banned outright under
+`plugin/hooks/` even though it's stdlib -- importing it costs ~8ms per
+process on Python 3.9 (it pulls in `inspect`/`ast`/`dis`/`tokenize`).
+Immutable value types there are `typing.NamedTuple` instead.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HOT_DIR = ROOT / "plugin" / "hooks"
+_BANNED_MODULES = frozenset({"dataclasses"})
 
 
 def _iter_py_files() -> list[Path]:
@@ -49,3 +55,13 @@ def test_no_module_stem_under_plugin_hooks_shadows_a_stdlib_module() -> None:
     stdlib = set(sys.stdlib_module_names)
     for path in _iter_py_files():
         assert path.stem not in stdlib, f"{path}: file name shadows stdlib module {path.stem!r}"
+
+
+def test_no_module_under_plugin_hooks_imports_dataclasses() -> None:
+    """D-028: `dataclasses` costs ~8ms per process on Python 3.9 (it pulls in
+    `inspect`/`ast`/`dis`/`tokenize`). Immutable value types under
+    `plugin/hooks/` must be `typing.NamedTuple` instead."""
+    for path in _iter_py_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _top_level_import_names(tree):
+            assert name not in _BANNED_MODULES, f"{path}: banned import {name!r} (D-028)"

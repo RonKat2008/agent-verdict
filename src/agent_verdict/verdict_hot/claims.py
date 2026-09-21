@@ -12,6 +12,12 @@ contains a literal success verb. A short lookback window before the
 matched verb is checked for a negation cue (task-3-brief.md: "Add tests
 for negation").
 
+Fenced code blocks (``` / ~~~), inline code spans (`` `...` ``), and
+Markdown blockquote lines (`> ...`) are stripped from the whole message
+before it is split into sentences (fix round 1 item 3), so code the
+assistant is showing (not asserting) and quoted tool output never becomes
+a claim -- e.g. `fixed = True  # tests passed` inside a fence.
+
 Like `gates.py`, the policy-supplied `success_verbs` list is compiled
 lazily and cached (`functools.cache`), never at import.
 """
@@ -25,9 +31,12 @@ from .policy import Policy
 
 # Fixed, small, internal-only patterns -- see gates.py's identical rationale
 # for compiling these (not the policy-supplied verb list) at import time.
+_FENCE_RE = re.compile(r"^(```|~~~)[\s\S]*?^\1[^\n]*$", re.MULTILINE)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+_BLOCKQUOTE_RE = re.compile(r"^[ \t]*>.*$", re.MULTILINE)
 _BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
 _TERMINATOR_RE = re.compile(r"[.!?]+")
-_EMPHASIS_RE = re.compile(r"(\*\*|\*|__|_|`+)(.+?)\1")
+_EMPHASIS_RE = re.compile(r"(\*\*|\*|__|_)(.+?)\1")
 
 _NEGATION_CUES = (
     "not",
@@ -60,6 +69,18 @@ _PRIORITY_KEYWORDS = ("test", "build", "lint", "type check", "typecheck", "fix")
 @cache
 def _verb_patterns(verbs: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
     return tuple(re.compile(rf"\b{re.escape(verb)}\b", re.IGNORECASE) for verb in verbs)
+
+
+def _strip_code_and_quotes(message: str) -> str:
+    """Drop fenced code blocks, inline code spans, and blockquote lines.
+
+    Order matters: fences first (a fence's content may itself contain
+    single backticks or `>`-prefixed lines that must not be separately
+    "rescued" by the later, narrower passes).
+    """
+    without_fences = _FENCE_RE.sub("", message)
+    without_inline_code = _INLINE_CODE_RE.sub("", without_fences)
+    return _BLOCKQUOTE_RE.sub("", without_inline_code)
 
 
 def _split_sentences(message: str) -> list[str]:
@@ -102,8 +123,9 @@ def _asserts_success(cleaned_sentence: str, verbs: tuple[str, ...]) -> bool:
 
 
 def extract_claims(message: str, policy: Policy) -> tuple[str, ...]:
+    cleaned_message = _strip_code_and_quotes(message)
     candidates: list[tuple[bool, str]] = []
-    for raw_sentence in _split_sentences(message):
+    for raw_sentence in _split_sentences(cleaned_message):
         cleaned = _strip_markdown(raw_sentence)
         if not cleaned or not _asserts_success(cleaned, policy.claims.success_verbs):
             continue

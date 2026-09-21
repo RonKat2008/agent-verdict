@@ -33,9 +33,10 @@
     },
     "never_send": {
       "type": "object",
-      "required": ["path_globs", "bash_patterns"],
+      "required": ["path_globs", "path_exclude_globs", "bash_patterns"],
       "properties": {
         "path_globs": { "type": "array", "items": { "type": "string" } },
+        "path_exclude_globs": { "type": "array", "items": { "type": "string" } },
         "bash_patterns": { "type": "array", "items": { "type": "string" } }
       }
     },

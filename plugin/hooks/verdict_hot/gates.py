@@ -33,14 +33,24 @@ from .policy import Policy
 _SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|\||\n")
 _VAR_ASSIGN_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|\"[^\"]*\"|\S*)\s*")
 
-# Wrapper commands that precede the real runner (task-3-brief.md /
-# global-constraints.md examples): stripped left to right, repeatedly,
-# alongside leading VAR=value assignments, until nothing more strips.
+# Wrapper commands that precede the real runner (task-3-brief.md,
+# global-constraints.md, fix round 1 item 2): stripped left to right,
+# repeatedly, alongside leading VAR=value assignments, until nothing more
+# strips. Once a wrapper is stripped, the runner underneath is matched by
+# its own bare pattern (e.g. "npx playwright test" -> "playwright test"),
+# so wrappers don't need one runner_pattern per wrapper+runner combination.
 _WRAPPERS = (
     "uv run",
     "npx",
+    "bunx",
+    "yarn dlx",
     "pnpm exec",
     "poetry run",
+    "pipx run",
+    "hatch run",
+    "pdm run",
+    "rye run",
+    "bundle exec",
     "python -m",
     "python3 -m",
     "time",
@@ -113,11 +123,18 @@ def is_never_send(tool_name: str, tool_input: Mapping[str, object], policy: Poli
     Keys off whichever field is actually present in `tool_input` rather
     than branching on `tool_name`, so it stays correct if a future tool
     reuses either field name.
+
+    `path_exclude_globs` (fix round 1 item 4) is checked before
+    `path_globs` so a public key (`*.pub`) or an example/template env file
+    is never flagged even though it would otherwise match a broader
+    include glob (`**/id_rsa*`, `**/.env*`).
     """
     file_path = tool_input.get("file_path")
     if isinstance(file_path, str):
         candidate = os.path.expanduser(file_path)
-        if _matches_any_glob(candidate, policy.never_send.path_globs):
+        if not _matches_any_glob(
+            candidate, policy.never_send.path_exclude_globs
+        ) and _matches_any_glob(candidate, policy.never_send.path_globs):
             return True
     command = tool_input.get("command")
     return isinstance(command, str) and _matches_any(command, policy.never_send.bash_patterns)
