@@ -144,6 +144,12 @@ _EXCLUDED_PEM_TYPES = frozenset({"PUBLIC KEY", "CERTIFICATE"})
 
 _ENTROPY_RULE_IDS = frozenset({"local-high-entropy-alnum", "local-high-entropy-b64"})
 
+# Value prefixes that mark the value itself as public by convention (fix
+# round 4): Stripe publishable keys are documented as shippable in client
+# code. Secret-side prefixes (`sk_live_`, `rk_live_`) are deliberately NOT
+# here.
+_PUBLIC_VALUE_PREFIXES = ("pk_live_", "pk_test_")
+
 # Fix round 3, item 3: placeholder/dictionary-word/plain-word filtering now
 # applies to every rule whose captured secret is a freeform "password-like"
 # value -- the three hand-picked local rules, `local-url-credential` (its
@@ -155,9 +161,21 @@ _ENTROPY_RULE_IDS = frozenset({"local-high-entropy-alnum", "local-high-entropy-b
 # group is the whole "sk_live_..." token) are not in this set and must
 # never be: splitting "sk_live_<suffix>" on "_" finds two short lowercase
 # words ("sk", "live") and would wrongly reject a real secret.
-_ASSIGNMENT_RULE_IDS = frozenset(
-    {"local-env-secret", "local-password-assignment", "generic-api-key", "local-url-credential"}
-) | frozenset(_redact_rules.ASSIGNMENT_LIKE_RULE_IDS)
+#
+# Fix round 4, finding 1(a): a rule whose captured secret must START with a
+# fixed literal the rule itself defines (`plaid-api-token`'s `access-`,
+# `typeform-api-token`'s `tfp_`, `new-relic-user-api-key`'s `NRAK-`, ...)
+# is a STRUCTURED vendor token, not a freeform value, so these filters must
+# never apply to it -- `access-sandbox-<uuid>` splits into lowercase words
+# and was 100% blind to `looks_like_dictionary_words` before this round.
+# The set is computed from the patterns by gen_redact.py, so it tracks the
+# vendored rules instead of being hand-enumerated.
+_ASSIGNMENT_RULE_IDS = (
+    frozenset(
+        {"local-env-secret", "local-password-assignment", "generic-api-key", "local-url-credential"}
+    )
+    | frozenset(_redact_rules.ASSIGNMENT_LIKE_RULE_IDS)
+) - frozenset(_redact_rules.LITERAL_PREFIXED_RULE_IDS)
 
 
 def is_standard_hex_digest(value: str) -> bool:
@@ -195,13 +213,40 @@ def _unwrap(value: str) -> str:
     return stripped
 
 
+_DIGIT_RUN_RE = re.compile(r"\d{4,}")
+_WORD_COVERAGE = 0.5
+
+
+def _has_mixed_case(value: str) -> bool:
+    return any(c.islower() for c in value) and any(c.isupper() for c in value)
+
+
 def looks_like_dictionary_words(value: str) -> bool:
-    """True for values like `prod-db-credentials`: a name, not a secret."""
-    parts = re.split(r"[-_]", _unwrap(value))
+    """True for values like `prod-db-credentials`: a name, not a secret.
+
+    Fix round 4, finding 1(b): "at least two lowercase alphabetic parts"
+    alone rejected 3.9% of random 40-character secrets (6.7% at 64), since a
+    long random `[a-z0-9_-]` run splits into parts that are often
+    accidentally all-alpha. Three further conditions, all properties of a
+    real name and none of a random value, bound that cost:
+
+    - the dictionary-like runs must cover at least half the value;
+    - no run of 4 or more digits (a name does not carry one);
+    - no mixed-case alternation (a name is written in one case).
+    """
+    unwrapped = _unwrap(value)
+    parts = re.split(r"[-_]", unwrapped)
     if len(parts) < 3:
         return False
     lowercase_words = [p for p in parts if p.isalpha() and p.islower() and len(p) >= 2]
-    return len(lowercase_words) >= 2
+    if len(lowercase_words) < 2:
+        return False
+    covered = sum(len(word) for word in lowercase_words)
+    if covered < _WORD_COVERAGE * len(unwrapped):
+        return False
+    if _DIGIT_RUN_RE.search(unwrapped):
+        return False
+    return not _has_mixed_case(unwrapped)
 
 
 def looks_like_placeholder(value: str) -> bool:
@@ -217,13 +262,20 @@ def looks_like_placeholder(value: str) -> bool:
     return len(stripped) >= 4 and set(stripped.lower()) <= {"x"}
 
 
+_SENTENCE_PUNCTUATION = ".,;:!?)]}"
+
+
 def looks_like_plain_english_word(value: str) -> bool:
     """True for a single all-lowercase alphabetic token (fix round 2, item 3):
     "whenever", "prompt", "protected" are never a password value regardless
-    of which separator matched them. A multi-word passphrase (fix round 3,
-    item 5) contains whitespace, so `.isalpha()` is already False for it --
-    this check never rejects a real multi-word passphrase."""
-    stripped = _unwrap(value)
+    of which separator matched them.
+
+    Fix round 4, finding 3: trailing sentence punctuation is stripped
+    first, because the word this catches is usually the first word of an
+    error message ("password: expired, reset required") and the captured
+    value then ends in a comma or a period.
+    """
+    stripped = _unwrap(value).strip(_SENTENCE_PUNCTUATION)
     return stripped.isalpha() and stripped.islower()
 
 
@@ -273,10 +325,26 @@ def _passes_entropy_filters(secret: str, preceding_text: str, pem_context: str) 
     return not is_inside_excluded_pem_block(pem_context)
 
 
+def has_public_token_prefix(value: str) -> bool:
+    """True for a value whose own prefix marks it PUBLIC by convention.
+
+    Stripe documents `pk_live_`/`pk_test_` as publishable keys meant to be
+    shipped in client code. The adjacency cue list covers this for the
+    entropy rules (whose span starts after the prefix); here the prefix is
+    the start of the captured value itself, which is how an assignment rule
+    (`STRIPE_PUBLISHABLE_KEY=pk_live_...`) sees it. Fix round 4: the
+    tightened dictionary-word filter no longer rejects these by accident,
+    so the convention is stated explicitly instead.
+    """
+    return _unwrap(value).lower().startswith(_PUBLIC_VALUE_PREFIXES)
+
+
 def _passes_assignment_filters(secret: str) -> bool:
     if looks_like_plain_english_word(secret):
         return False
     if looks_like_placeholder(secret):
+        return False
+    if has_public_token_prefix(secret):
         return False
     return not looks_like_dictionary_words(secret)
 

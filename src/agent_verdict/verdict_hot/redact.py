@@ -58,6 +58,10 @@ _CONTEXT_LOOKBACK = 32
 # public-key/certificate block header (fix round 2, item 4): those blocks
 # can be a few KB.
 _PEM_LOOKBACK = 4096
+# Rule ids that say only "this looked like a secret", with no family
+# attribution (fix round 4, finding 4).
+_GENERIC_RULE_ID = "generic-api-key"
+_ENTROPY_RULE_PREFIX = "local-high-entropy-"
 _REDACTED_MARKER_PREFIX = "[REDACTED:"
 _MARKER_TEMPLATE = _REDACTED_MARKER_PREFIX + "{}]"
 _FAILURE_MARKER = "[redaction failed]"
@@ -155,6 +159,31 @@ def _windows(text: str) -> list[tuple[int, str]]:
         start = end - _WINDOW_OVERLAP
 
 
+def _is_generic_rule(rule_id: str) -> bool:
+    return rule_id == _GENERIC_RULE_ID or rule_id.startswith(_ENTROPY_RULE_PREFIX)
+
+
+def _attribute(spans: set[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
+    """One rule id per span, preferring a non-generic rule (fix round 4,
+    finding 4).
+
+    A span matched by both a vendor rule and a generic one used to be
+    credited alphabetically, so `generic-api-key` beat `openai-api-key` on
+    the identical span and non-generic recall was understated. Ties among
+    non-generic (or among generic) ids stay alphabetical, so attribution
+    remains deterministic.
+    """
+    best: dict[tuple[int, int], str] = {}
+    for start, end, rule_id in spans:
+        current = best.get((start, end))
+        if current is None or (_is_generic_rule(current), current) > (
+            _is_generic_rule(rule_id),
+            rule_id,
+        ):
+            best[(start, end)] = rule_id
+    return sorted((start, end, rule_id) for (start, end), rule_id in best.items())
+
+
 def _redact_unsafe(text: str) -> tuple[str, tuple[str, ...]]:
     spans: set[tuple[int, int, str]] = set()
     for offset, window in _windows(text):
@@ -167,7 +196,7 @@ def _redact_unsafe(text: str) -> tuple[str, tuple[str, ...]]:
     parts: list[str] = []
     rule_ids: list[str] = []
     cursor = 0
-    for start, end, rule_id in sorted(spans):
+    for start, end, rule_id in _attribute(spans):
         if start < cursor:
             continue  # overlaps a span already accepted; keep the earlier one
         parts.append(text[cursor:start])

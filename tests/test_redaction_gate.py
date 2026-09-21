@@ -194,6 +194,25 @@ def test_bare_context_family_counts_are_nonzero() -> None:
         )
 
 
+def test_password_hash_sql_dump_keeps_its_surrounding_sql() -> None:
+    """Fix round 4, finding 6: the opaque-token table counts over-redaction
+    per ROW, which cannot tell "the hash was replaced" from "the whole line
+    was replaced". D-027 only tolerates losing the opaque span itself, so
+    check per SPAN: for every `password-hash-sql-dump` negative, the
+    statement, the table name and the column names must survive even when
+    the hash is redacted."""
+    rows = _load_corpus()
+    sql_rows = [r for r in rows if r["secret"] is None and r["family"] == "password-hash-sql-dump"]
+    assert sql_rows, "corpus has no password-hash-sql-dump negatives"
+    for row in sql_rows:
+        text = str(row["text"])
+        cleaned, _hits = redact.redact(text)
+        for fragment in ("INSERT INTO", "users", "email", "password", "@example.com"):
+            assert fragment in cleaned, (
+                f"redaction removed SQL context {fragment!r} from {text!r} -> {cleaned!r}"
+            )
+
+
 def test_neg_class_is_set_from_category_not_outcome() -> None:
     """D-027: `neg_class` must be a per-category constant. Every row in a
     given category has the same class (never derived from whether the

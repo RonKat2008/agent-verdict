@@ -67,6 +67,16 @@ _TRAILING_DELIM_NEW = r"""(?=[\x60'"\s;)\]},.:><&]|\\[nr]|$)"""
 # this template and are correctly excluded.
 _ASSIGNMENT_TEMPLATE = r"""[\s'"]{0,3}(?:=|>|:{1,3}=|\|\||:|=>|\?=|,)[\x60'"\s=]{0,5}"""
 
+# Fix round 4, findings 1(a) and 5: literal prefixes a rule defines for
+# itself. Characters that end a literal run in a regex fragment.
+_LITERAL_STOP = frozenset("[](){}|^$.")
+_QUANTIFIERS = frozenset("?*+{")
+# Openers stripped before reading a literal prefix at the START of a whole
+# pattern (never `(?:`, see `_capturing_group_bodies`).
+_PATTERN_OPENERS = ("(?i:", "(?m)", "(?i)", "(?im)", "(?s)", "(?<=", "(?:", "\\b", "^", "(")
+_MIN_GROUP_PREFIX = 2
+_MIN_KEYWORD_PREFIX = 3
+
 _POSIX_CLASSES = {
     "[:alnum:]": "A-Za-z0-9",
     "[:alpha:]": "A-Za-z",
@@ -105,29 +115,44 @@ LOCAL_RULES: tuple[tuple[str, str, tuple[str, ...], float | None], ...] = (
         "local-password-assignment",
         # Fix round 2, item 3: "a hint about the password prompt." and
         # "password whenever"/"password protected" (ordinary English, no
-        # assignment) must not hit. Four alternatives, each with its own
-        # capturing group (redact.py unions whichever one participates),
-        # tried in this order (Python alternation is first-match, not
-        # longest-match, so the multi-word branch must come before the
-        # single-word one or it would never get a chance to fire):
-        # (1) fix round 3, item 5: an explicit separator followed by a
-        #     3-to-6-word passphrase ("correct horse battery staple");
-        #     capped at 6 words so it cannot swallow an entire unrelated
-        #     sentence that happens to follow a colon;
-        # (2) an explicit `:`/`=` separator is REQUIRED (not optional
+        # assignment) must not hit. Three alternatives, each with its own
+        # capturing group (redact.py unions whichever one participates):
+        # (1) an explicit `:`/`=` separator is REQUIRED (not optional
         #     whitespace, as the first cut had it) for a single-word value;
-        # (3) a `.netrc`-style bare `password <value>` line, but only when
+        # (2) a `.netrc`-style bare `password <value>` line, but only when
         #     the same line also mentions "machine" or "login";
-        # (4) a line that is JUST "password <value>", where <value>
-        #     contains a digit or symbol (excludes "password protected").
+        # (3) an indented or bare assignment line whose whole value sits on
+        #     the line, where the value contains a digit or a symbol
+        #     (excludes "password protected").
         # `_redact_filters.looks_like_plain_english_word` additionally
-        # rejects a lowercase-alphabetic-only value from branches 2-4 (a
-        # multi-word value from branch 1 always contains whitespace, so
-        # that check never applies to it).
-        r"(?im)\bpassword\s*[:=]\s*(\S+(?:\s+\S+){2,5})"
-        r"|\bpassword\s*[:=]\s*(\S{6,})"
+        # rejects a lowercase-alphabetic-only value.
+        #
+        # Fix round 4, finding 2: branch (3) used to be
+        # `^\s*password\s+(\S*[0-9\W]\S*)\s*$`, whose `\W` matches a SPACE,
+        # so `  password = "changeme"` captured `= "changeme"` -- separator
+        # included -- which `_unwrap` could not unquote, bypassing every
+        # placeholder check. The separator and the surrounding quotes are
+        # now matched OUTSIDE the group, and the "contains a digit or a
+        # symbol" requirement is a lookahead over non-space characters only
+        # (`[^\w\s]` instead of `\W`), so a value can never span a space.
+        # The value's first character also excludes the separators and
+        # quotes themselves, so the optional `[:=]?` cannot be skipped in
+        # order to swallow `=` into the value (the same bug one level
+        # down), and `password` must be followed by a separator or by
+        # whitespace, so `PASSWORD_MIN_LENGTH=12` is not an assignment of
+        # a value named `_MIN_LENGTH=12`.
+        #
+        # Fix round 4, finding 3: the fix-round-3 multi-word passphrase
+        # branch is REMOVED. It redacted ordinary prose ("password:
+        # authentication failed for user app on host db.internal"), which
+        # D-027 classes as evidence text -- the harm the gate exists to
+        # bound. A quoted multi-word value is still caught by branch (1)
+        # (its first quoted word is a non-word-shaped value); an unquoted
+        # one is deliberately not.
+        r"(?im)\bpassword\s*[:=]\s*(\S{6,})"
         r"|^(?=.*\b(?:machine|login)\b).*?\bpassword\s+(\S{6,})"
-        r"|^\s*password\s+(\S*[0-9\W]\S*)\s*$",
+        r"|^[ \t]*password(?:[ \t]*[:=]|[ \t])[ \t]*[\x60'\"]?"
+        r"(?=\S*(?:\d|[^\w\s]))([^\s:=\x60'\"]\S*?)[\x60'\"]?[ \t]*$",
         ("password",),
         None,
     ),
@@ -359,8 +384,10 @@ def build_rules() -> tuple[
     list[tuple[str, str]],
     list[str],
     list[str],
+    list[tuple[str, str]],
 ]:
-    """Returns (compiled RULES entries, skipped (id, reason) pairs, allow regexes, stopwords)."""
+    """Returns (RULES entries, skipped (id, reason) pairs, allow regexes,
+    stopwords, keyword-prefilter adjustments)."""
     vendored, allow_regexes, stopwords = _load_vendored_rules()
     candidates: list[tuple[str, str, tuple[str, ...], float | None]] = []
     path_only: list[tuple[str, str]] = []
@@ -375,6 +402,7 @@ def build_rules() -> tuple[
         entropy_floor = float(entropy) if entropy is not None else None
         candidates.append((rule_id, translated, keywords, entropy_floor))
     candidates.extend(LOCAL_RULES)
+    candidates, keyword_adjustments = apply_keyword_prefilter_fix(candidates)
     allow_regexes = [translate_regex(r) for r in allow_regexes]
 
     check_results = _compile_check([c[1] for c in candidates])
@@ -395,7 +423,7 @@ def build_rules() -> tuple[
         if not result["ok"]:
             skipped.append((f"[allowlist] {pattern!r}", result.get("error", "unknown error")))
 
-    return compiled, skipped, good_allow_regexes, stopwords
+    return compiled, skipped, good_allow_regexes, stopwords, keyword_adjustments
 
 
 def _format_rules_literal(
@@ -405,6 +433,149 @@ def _format_rules_literal(
     for rule_id, pattern, keywords, entropy in sorted(rules, key=lambda r: r[0]):
         lines.append(f"    ({rule_id!r}, {pattern!r}, {keywords!r}, {entropy!r}),")
     return "\n".join(lines)
+
+
+def _literal_prefix(fragment: str) -> str:
+    """The leading run of plain literal characters in a regex fragment.
+
+    Stops at the first metacharacter. A literal immediately followed by a
+    quantifier is not fixed, so it is dropped (`ab?` yields `a`). An escape
+    of an alphanumeric (`\\b`, `\\d`, `\\w`) is a class or an anchor, not a
+    literal, and ends the run.
+    """
+    out: list[str] = []
+    i, n = 0, len(fragment)
+    while i < n:
+        char = fragment[i]
+        if char == "\\":
+            if i + 1 >= n or fragment[i + 1].isalnum():
+                break
+            out.append(fragment[i + 1])
+            i += 2
+            continue
+        if char in _QUANTIFIERS:
+            if out:
+                out.pop()
+            break
+        if char in _LITERAL_STOP:
+            break
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def _is_distinctive(prefix: str, minimum: int) -> bool:
+    return len(prefix) >= minimum and any(c.isalnum() for c in prefix)
+
+
+def _capturing_group_bodies(pattern: str) -> list[str]:
+    """The text following each capturing group's open paren.
+
+    A `(?i:` flag scope is transparent (it constrains nothing about the
+    value); `(?:` is NOT stripped, so a group starting with an optional
+    non-capturing alternation is correctly reported as having no fixed
+    prefix.
+    """
+    bodies: list[str] = []
+    i, n, in_class = 0, len(pattern), False
+    while i < n:
+        char = pattern[i]
+        if char == "\\":
+            i += 2
+            continue
+        if in_class:
+            in_class = char != "]"
+            i += 1
+            continue
+        if char == "[":
+            in_class = True
+        elif char == "(" and not pattern.startswith("(?", i):
+            body = pattern[i + 1 :]
+            bodies.append(body[4:] if body.startswith("(?i:") else body)
+        elif char == "(" and pattern.startswith("(?P<", i):
+            bodies.append(pattern[pattern.index(">", i) + 1 :])
+        i += 1
+    return bodies
+
+
+def secret_literal_prefix(pattern: str) -> str:
+    """The fixed literal prefix every captured secret of `pattern` starts with.
+
+    Empty when any capturing group's value can start with something other
+    than a fixed literal (fix round 4, finding 1a). Every capturing group
+    counts, because `redact._match_spans` treats each participating group
+    as a secret candidate.
+    """
+    bodies = _capturing_group_bodies(pattern)
+    if not bodies:
+        return ""
+    prefixes = [_literal_prefix(body) for body in bodies]
+    if not all(_is_distinctive(p, _MIN_GROUP_PREFIX) for p in prefixes):
+        return ""
+    return prefixes[0]
+
+
+def pattern_literal_prefix(pattern: str) -> str:
+    """A distinctive literal the matched text must start with, or ""."""
+    i = 0
+    changed = True
+    while changed:
+        changed = False
+        for opener in _PATTERN_OPENERS:
+            if pattern.startswith(opener, i):
+                i += len(opener)
+                changed = True
+                break
+    prefix = _literal_prefix(pattern[i:])
+    return prefix if _is_distinctive(prefix, _MIN_KEYWORD_PREFIX) else ""
+
+
+def _alnum_only(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def keyword_can_occur(keyword: str, pattern: str) -> bool:
+    """True when `keyword` can appear in text this pattern matches.
+
+    Gitleaks declares a vendor name as the prefilter keyword even for rules
+    that match the token alone (`airtable-personnal-access-token` matches
+    `pat<...>`, which never contains "airtable"), which blinds the keyword
+    prefilter (fix round 4, finding 5). Regex punctuation is ignored so
+    `linked[_-]?in` still supports the keyword "linkedin" and `SG\\.`
+    supports "sg.".
+    """
+    return _alnum_only(keyword) in _alnum_only(pattern)
+
+
+def apply_keyword_prefilter_fix(
+    rules: list[tuple[str, str, tuple[str, ...], float | None]],
+) -> tuple[list[tuple[str, str, tuple[str, ...], float | None]], list[tuple[str, str]]]:
+    """Replace vendor keywords that can never occur in the matched text.
+
+    The replacement is the rule's own leading literal when it has a
+    distinctive one (so `airtable-personnal-access-token` prefilters on
+    `pat`), otherwise no keyword at all, which makes the rule always run
+    (`facebook-access-token`, whose token carries no literal).
+    """
+    fixed: list[tuple[str, str, tuple[str, ...], float | None]] = []
+    adjusted: list[tuple[str, str]] = []
+    for rule_id, pattern, keywords, entropy in rules:
+        if not keywords or any(keyword_can_occur(k, pattern) for k in keywords):
+            fixed.append((rule_id, pattern, keywords, entropy))
+            continue
+        prefix = pattern_literal_prefix(pattern)
+        new_keywords = (prefix.lower(),) if prefix else ()
+        adjusted.append((rule_id, f"{keywords} -> {new_keywords}"))
+        fixed.append((rule_id, pattern, new_keywords, entropy))
+    return fixed, adjusted
+
+
+def _literal_prefixed_rule_ids(
+    rules: list[tuple[str, str, tuple[str, ...], float | None]],
+) -> list[str]:
+    return sorted(
+        rule_id for rule_id, pattern, _kw, _ent in rules if secret_literal_prefix(pattern)
+    )
 
 
 def _assignment_like_rule_ids(
@@ -426,6 +597,8 @@ def write_rules_file(
     stop_literal = ",\n".join(f"    {s!r}" for s in stopwords)
     assignment_ids = _assignment_like_rule_ids(rules)
     assignment_literal = ",\n".join(f"    {r!r}" for r in assignment_ids)
+    prefixed_ids = _literal_prefixed_rule_ids(rules)
+    prefixed_literal = ",\n".join(f"    {r!r}" for r in prefixed_ids)
     content = f'''"""GENERATED by `python3 scripts/gen_redact.py`. Do not edit by hand.
 
 Source: vendor/gitleaks.toml (MIT license, see vendor/GITLEAKS_LICENSE) at
@@ -469,18 +642,36 @@ STOPWORDS: tuple[str, ...] = (
 ASSIGNMENT_LIKE_RULE_IDS: tuple[str, ...] = (
 {assignment_literal}
 )
+
+# Fix round 4, finding 1(a): rule ids whose every captured group starts
+# with a fixed literal the RULE ITSELF defines (`plaid-api-token`'s
+# `access-`, `typeform-api-token`'s `tfp_`, `new-relic-user-api-key`'s
+# `NRAK-`, ...), computed from the pattern by
+# `gen_redact.secret_literal_prefix`. Such a value is a structured vendor
+# token, not a freeform one, so the placeholder and dictionary-word filters
+# must never reject it -- `access-sandbox-<uuid>` is dictionary-word-shaped
+# and was 100% blind before this round.
+LITERAL_PREFIXED_RULE_IDS: tuple[str, ...] = (
+{prefixed_literal}
+)
 '''
     OUTPUT_PATH.write_text(content, encoding="utf-8")
 
 
 def generate() -> int:
     gitleaks_commit = VERSION_PATH.read_text(encoding="utf-8").strip()
-    rules, skipped, allow_regexes, stopwords = build_rules()
+    rules, skipped, allow_regexes, stopwords, keyword_adjustments = build_rules()
     write_rules_file(rules, allow_regexes, stopwords, gitleaks_commit)
 
     rule_skips = [s for s in skipped if not s[0].startswith("[allowlist] ")]
     total = len(rules) + len(rule_skips)
     print(f"compiled {len(rules)} of {total}")
+    prefixed = _literal_prefixed_rule_ids(rules)
+    print(f"literal-prefixed rules (word filters never apply): {len(prefixed)}")
+    if keyword_adjustments:
+        print("keyword prefilter adjusted (vendor keyword cannot occur in the token):")
+        for rule_id, change in keyword_adjustments:
+            print(f"  - {rule_id}: {change}")
     if skipped:
         print("skipped rules:")
         for rule_id, reason in skipped:

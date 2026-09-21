@@ -178,18 +178,23 @@ def test_structured_family_rule_is_never_suppressed_by_public_token_cues() -> No
 # --------------------------------------------------------------------------
 
 
-def test_multiword_passphrase_with_colon_is_redacted() -> None:
-    text = "password: correct horse battery staple"
+@pytest.mark.parametrize(
+    "text",
+    [
+        "password: correct horse battery staple",
+        "password = correct horse battery staple",
+    ],
+)
+def test_unquoted_multiword_value_is_no_longer_redacted(text: str) -> None:
+    """SUPERSEDED by fix round 4, finding 3: the multi-word passphrase
+    branch was removed because it redacted ordinary prose ("password:
+    authentication failed for user app on host db.internal"), which D-027
+    classes as evidence text. An unquoted multi-word value is
+    indistinguishable from such a sentence, so it is no longer redacted; a
+    quoted one still is (see tests/unit/test_redact_fix_round_4.py)."""
     cleaned, hits = redact.redact(text)
-    assert hits >= 1
-    assert "correct horse battery staple" not in cleaned
-
-
-def test_multiword_passphrase_with_equals_is_redacted() -> None:
-    text = "password = correct horse battery staple"
-    cleaned, hits = redact.redact(text)
-    assert hits >= 1
-    assert "correct horse battery staple" not in cleaned
+    assert hits == 0
+    assert cleaned == text
 
 
 @pytest.mark.parametrize(
