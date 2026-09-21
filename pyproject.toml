@@ -29,6 +29,12 @@ packages = ["src/agent_verdict"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# pre-commit's local ruff hooks pass staged file paths explicitly (see
+# .pre-commit-config.yaml), and ruff ignores `exclude`/`extend-exclude` for
+# explicitly-passed paths unless `force-exclude` is set. Needed so the
+# generated _redact_rules.py stays excluded (task-2-brief.md) even when it's
+# one of the staged files a commit passes to the hook.
+force-exclude = true
 # ruff 0.16.8's formatter reformats Python code fences embedded in Markdown
 # by default (confirmed: `ruff format --check --isolated` on
 # docs/superpowers/plans/2026-09-20-m0-foundations.md reformats those fences
@@ -36,7 +42,11 @@ target-version = "py311"
 # line-length = 100 already matches, so `ruff format --check .` reports it
 # as already formatted). Documentation must never be rewritten by the
 # formatter, so exclude it entirely.
-extend-exclude = ["docs"]
+# vendor/ is a verbatim third-party vendor drop (task-2-brief.md) and
+# _redact_rules.py is GENERATED (scripts/gen_redact.py): both are excluded
+# from lint/format since neither is hand-edited and the generated rules file
+# has many lines over the line-length limit by construction.
+extend-exclude = ["docs", "vendor", "_redact_rules.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
@@ -55,7 +65,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 strict = true
 python_version = "3.11"
 files = ["src", "scripts", "tests", "plugin/hooks"]
-exclude = ["scripts/fixture_capture_plugin"]
+exclude = ["scripts/fixture_capture_plugin", "vendor", "_redact_rules\\.py$"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,4 +1,4 @@
-.PHONY: setup check test test-fast sync-hot capture-fixtures bench-provider clean
+.PHONY: setup check test test-fast sync-hot gen-redact capture-fixtures bench-provider clean
 
 setup:
 	uv sync
@@ -7,6 +7,10 @@ setup:
 
 sync-hot:
 	uv run python scripts/sync_hot.py
+
+gen-redact:
+	uv run python scripts/gen_redact.py
+	uv run python scripts/gen_redact.py --corpus
 
 check:
 	uv run ruff check .
