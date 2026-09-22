@@ -1,4 +1,4 @@
-.PHONY: setup check test test-fast sync-hot gen-redact capture-fixtures bench-provider bench-hook e2e-cheap plugin-validate doctor clean
+.PHONY: setup check test test-fast sync-hot gen-redact regen-golden capture-fixtures bench-provider bench-hook e2e-cheap plugin-validate doctor clean
 
 setup:
 	uv sync
@@ -11,6 +11,9 @@ sync-hot:
 gen-redact:
 	uv run python scripts/gen_redact.py
 	uv run python scripts/gen_redact.py --corpus
+
+regen-golden:
+	uv run python scripts/regen_golden.py
 
 check:
 	uv run ruff check .

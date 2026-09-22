@@ -13,7 +13,8 @@
     "soft_failure",
     "claims",
     "span",
-    "thresholds"
+    "thresholds",
+    "state"
   ],
   "properties": {
     "policy_version": { "type": "string" },
@@ -88,6 +89,16 @@
       "required": ["t_ack_hi"],
       "properties": {
         "t_ack_hi": { "type": "number" }
+      }
+    },
+    "state": {
+      "type": "object",
+      "required": ["target_tokens", "max_tokens", "excerpt_head", "excerpt_tail"],
+      "properties": {
+        "target_tokens": { "type": "integer" },
+        "max_tokens": { "type": "integer" },
+        "excerpt_head": { "type": "integer" },
+        "excerpt_tail": { "type": "integer" }
       }
     }
   }

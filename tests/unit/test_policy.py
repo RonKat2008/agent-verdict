@@ -30,6 +30,25 @@ def test_load_policy_falls_back_to_packaged_default(isolated_verdict_home: Path)
     assert policy.mode == "shadow"
     assert policy.claims.max_claims == 6
     assert "implemented" in policy.claims.success_verbs
+    assert policy.state.target_tokens == 4000
+    assert policy.state.max_tokens == 22000
+    assert policy.state.excerpt_head == 200
+    assert policy.state.excerpt_tail == 600
+
+
+def test_load_policy_user_override_may_omit_state_section(isolated_verdict_home: Path) -> None:
+    """task-2-brief.md: a user override that never touches `state` keeps the
+    packaged default's values (the top-level merge in `_merge_top_level`
+    handles this the same way it does for every other section)."""
+    isolated_verdict_home.mkdir(parents=True, exist_ok=True)
+    (isolated_verdict_home / "policy.json").write_text(
+        json.dumps({"mode": "enforce"}), encoding="utf-8"
+    )
+
+    policy = policy_mod.load_policy()
+
+    assert policy.state.target_tokens == 4000
+    assert policy.state.max_tokens == 22000
 
 
 def test_load_policy_finds_packaged_default_via_cli_layout(isolated_verdict_home: Path) -> None:

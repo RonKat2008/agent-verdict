@@ -116,6 +116,26 @@ class Thresholds(NamedTuple):
     t_ack_hi: float
 
 
+class StatePolicy(NamedTuple):
+    """Provider state builder budgets (task-2-brief.md, D-010, C4).
+
+    `target_tokens` is the size `state.build_state` compresses toward;
+    `max_tokens` is the hard cap it must never exceed (token estimate is
+    `len(json.dumps(state)) // 4`). `excerpt_head`/`excerpt_tail` bound how
+    much of each `step_output_excerpts` entry survives once compression
+    reaches that stage. A user override may omit this whole section --
+    like every other section here, `_merge_top_level` overlays the user's
+    top-level keys onto the packaged default one key at a time, so leaving
+    `state` out of `~/.verdict/policy.json` keeps the packaged default's
+    values untouched.
+    """
+
+    target_tokens: int
+    max_tokens: int
+    excerpt_head: int
+    excerpt_tail: int
+
+
 class Policy(NamedTuple):
     policy_version: str
     mode: str
@@ -126,6 +146,7 @@ class Policy(NamedTuple):
     claims: ClaimsPolicy
     span: SpanPolicy
     thresholds: Thresholds
+    state: StatePolicy
 
 
 _REQUIRED_TOP_KEYS = (
@@ -138,6 +159,7 @@ _REQUIRED_TOP_KEYS = (
     "claims",
     "span",
     "thresholds",
+    "state",
 )
 
 
@@ -266,6 +288,15 @@ def _build_thresholds(raw: Mapping[str, Any]) -> Thresholds:
     return Thresholds(t_ack_hi=float(_require(raw, "t_ack_hi", "thresholds")))
 
 
+def _build_state(raw: Mapping[str, Any]) -> StatePolicy:
+    return StatePolicy(
+        target_tokens=int(_require(raw, "target_tokens", "state")),
+        max_tokens=int(_require(raw, "max_tokens", "state")),
+        excerpt_head=int(_require(raw, "excerpt_head", "state")),
+        excerpt_tail=int(_require(raw, "excerpt_tail", "state")),
+    )
+
+
 def _build_policy(raw: Mapping[str, Any]) -> Policy:
     for key in _REQUIRED_TOP_KEYS:
         if key not in raw:
@@ -279,6 +310,7 @@ def _build_policy(raw: Mapping[str, Any]) -> Policy:
         claims = _build_claims(raw["claims"])
         span = _build_span(raw["span"])
         thresholds = _build_thresholds(raw["thresholds"])
+        state = _build_state(raw["state"])
     except (TypeError, ValueError, KeyError) as exc:
         raise PolicyError(f"malformed policy field: {exc}") from exc
 
@@ -292,4 +324,5 @@ def _build_policy(raw: Mapping[str, Any]) -> Policy:
         claims=claims,
         span=span,
         thresholds=thresholds,
+        state=state,
     )
