@@ -158,5 +158,11 @@
       "completed"
     ],
     "max_claims": 6
+  },
+  "span": {
+    "max_prompts": 5
+  },
+  "thresholds": {
+    "t_ack_hi": 0.7
   }
 }

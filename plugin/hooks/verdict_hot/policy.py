@@ -92,6 +92,30 @@ class ClaimsPolicy(NamedTuple):
     max_claims: int
 
 
+class SpanPolicy(NamedTuple):
+    """task-1-brief.md: the verification span walk-back (PLAN.md 5.3, D-020).
+
+    Only `max_prompts` is needed by Task 1; kept as its own section (rather
+    than folded into an existing one) since Task 4 grows it further (e.g. a
+    guard-related field) without touching unrelated policy sections.
+    """
+
+    max_prompts: int
+
+
+class Thresholds(NamedTuple):
+    """Score thresholds shared across span/verdict logic.
+
+    Only `t_ack_hi` is needed by Task 1 (D-020: a stop's `acks_failures`
+    score at or above this acknowledges a listed failure). Task 4 adds more
+    thresholds (e.g. for R1-R4 policy rules) to this same section, so the
+    shape stays extensible: a user override may set any subset of fields
+    once Task 4 lands, exactly like every other policy section.
+    """
+
+    t_ack_hi: float
+
+
 class Policy(NamedTuple):
     policy_version: str
     mode: str
@@ -100,6 +124,8 @@ class Policy(NamedTuple):
     checks: ChecksPolicy
     soft_failure: SoftFailurePolicy
     claims: ClaimsPolicy
+    span: SpanPolicy
+    thresholds: Thresholds
 
 
 _REQUIRED_TOP_KEYS = (
@@ -110,6 +136,8 @@ _REQUIRED_TOP_KEYS = (
     "checks",
     "soft_failure",
     "claims",
+    "span",
+    "thresholds",
 )
 
 
@@ -230,6 +258,14 @@ def _build_claims(raw: Mapping[str, Any]) -> ClaimsPolicy:
     )
 
 
+def _build_span(raw: Mapping[str, Any]) -> SpanPolicy:
+    return SpanPolicy(max_prompts=int(_require(raw, "max_prompts", "span")))
+
+
+def _build_thresholds(raw: Mapping[str, Any]) -> Thresholds:
+    return Thresholds(t_ack_hi=float(_require(raw, "t_ack_hi", "thresholds")))
+
+
 def _build_policy(raw: Mapping[str, Any]) -> Policy:
     for key in _REQUIRED_TOP_KEYS:
         if key not in raw:
@@ -241,6 +277,8 @@ def _build_policy(raw: Mapping[str, Any]) -> Policy:
         checks = _build_checks(raw["checks"])
         soft_failure = _build_soft_failure(raw["soft_failure"])
         claims = _build_claims(raw["claims"])
+        span = _build_span(raw["span"])
+        thresholds = _build_thresholds(raw["thresholds"])
     except (TypeError, ValueError, KeyError) as exc:
         raise PolicyError(f"malformed policy field: {exc}") from exc
 
@@ -252,4 +290,6 @@ def _build_policy(raw: Mapping[str, Any]) -> Policy:
         checks=checks,
         soft_failure=soft_failure,
         claims=claims,
+        span=span,
+        thresholds=thresholds,
     )

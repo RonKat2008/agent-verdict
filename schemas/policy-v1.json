@@ -4,7 +4,17 @@
   "description": "Shape of plugin/policies/default.json and a user's ~/.verdict/policy.json override (task-3-brief.md).",
   "type": "object",
   "additionalProperties": true,
-  "required": ["policy_version", "mode", "store", "never_send", "checks", "soft_failure", "claims"],
+  "required": [
+    "policy_version",
+    "mode",
+    "store",
+    "never_send",
+    "checks",
+    "soft_failure",
+    "claims",
+    "span",
+    "thresholds"
+  ],
   "properties": {
     "policy_version": { "type": "string" },
     "mode": { "type": "string" },
@@ -64,6 +74,20 @@
       "properties": {
         "success_verbs": { "type": "array", "items": { "type": "string" } },
         "max_claims": { "type": "integer" }
+      }
+    },
+    "span": {
+      "type": "object",
+      "required": ["max_prompts"],
+      "properties": {
+        "max_prompts": { "type": "integer" }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "required": ["t_ack_hi"],
+      "properties": {
+        "t_ack_hi": { "type": "number" }
       }
     }
   }
