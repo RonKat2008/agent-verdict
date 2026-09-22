@@ -312,10 +312,6 @@ def _walk_back(
     idx = seen.index(current_prompt_id)
     reason = "start_of_session"
     while True:
-        block_rows = [r for r in safe_rows if _prompt_id_of(r) == included[-1]]
-        if _has_clean_stop(block_rows):
-            reason = "clean_stop"
-            break
         if len(included) >= max_prompts:
             reason = "max_prompts"
             break
@@ -325,6 +321,17 @@ def _walk_back(
         prev_pid = seen[idx - 1]
         if _clear_between(clear_indices, last_idx, first_idx, prev_pid, included[-1]):
             reason = "clear"
+            break
+        # Fix round 1 (Critical): a clean stop is a BOUNDARY, not a member.
+        # Prompts at or before the most recent clean stop were already
+        # judged and passed, so the candidate older block is checked for a
+        # clean stop *before* it is added -- if it has one, the walk stops
+        # here and that block (and everything before it) is excluded
+        # entirely, never re-litigated. The current prompt (`included[0]`)
+        # is never subject to this check: it is always a member.
+        candidate_rows = [r for r in safe_rows if _prompt_id_of(r) == prev_pid]
+        if _has_clean_stop(candidate_rows):
+            reason = "clean_stop"
             break
         included.append(prev_pid)
         idx -= 1

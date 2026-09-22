@@ -119,6 +119,11 @@ def _session_start(source: str = "startup") -> dict[str, Any]:
 
 
 def test_span_stops_at_a_clean_stop() -> None:
+    """Fix round 1 (Critical): a clean stop is a BOUNDARY, not a member.
+
+    p2's own clean stop means p2 (and everything before it) was already
+    judged and passed -- the span for p3 is p3 alone.
+    """
     rows = [
         _prompt("p1"),
         _post_fail("p1", command="pytest", tool_use_id="f_old"),
@@ -131,9 +136,30 @@ def test_span_stops_at_a_clean_stop() -> None:
 
     result = span.build_span(rows, "p3", _POLICY)
 
-    assert result.span_prompt_ids == ("p2", "p3")
+    assert result.span_prompt_ids == ("p3",)
     assert result.reason == "clean_stop"
-    assert all(step.prompt_id != "p1" for step in result.steps)
+    assert all(step.prompt_id not in ("p1", "p2") for step in result.steps)
+    assert result.unresolved_failures == ()
+
+
+def test_prompt_with_its_own_clean_stop_and_a_failure_is_excluded() -> None:
+    """Reviewer's sharper reproduction (fix round 1): prompt A holds both a
+    failure and its own clean-stop `action` row. A is a boundary the walk
+    stops at, not a member -- its failure must never be re-litigated from
+    B's span."""
+    rows = [
+        _prompt("A"),
+        _post_fail("A", command="pytest", tool_use_id="fA"),
+        _action("A", action_value="pass", open_failures=[]),
+        _prompt("B"),
+        _post("B", command="echo hi", tool_use_id="eB"),
+    ]
+
+    result = span.build_span(rows, "B", _POLICY)
+
+    assert result.span_prompt_ids == ("B",)
+    assert result.reason == "clean_stop"
+    assert all(step.prompt_id != "A" for step in result.steps)
     assert result.unresolved_failures == ()
 
 
