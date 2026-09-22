@@ -138,6 +138,7 @@
       }
     },
     "denylist": {
+      "description": "Regex strings, paired by position with denylist_ids. Two rule ids (deny_rm_root, deny_force_push_protected) are matched by a deliberately broad pre-filter regex here; a Python check in rules.py then confirms the real target (the actual filesystem/repo root, or a force flag paired with a protected branch), so a user regex for those two ids can narrow what triggers the check but cannot widen it past that confirmation step.",
       "type": "array",
       "items": { "type": "string" }
     },

@@ -30,6 +30,21 @@ access, install with two commands inside Claude Code:
 macOS and Linux. On Windows, the hook records a `disabled` outcome and exits
 immediately; nothing is recorded there yet.
 
+## PreToolUse rules gate
+
+Before a `Bash`, `Write`, `Edit`, or `NotebookEdit` call runs, a deterministic,
+network-free check can deny a destructive command (a recursive delete of the
+filesystem root or the current repository, a force-push to a protected branch, a
+filesystem format, and a few others) or ask for confirmation first (a write to a
+credential-shaped path, a command that would print one, or `git reset --hard`).
+Two of the matchers, `deny_mkfs` and `deny_db_truncate`, match the bare word
+anywhere in the command, including inside a quoted string being echoed or
+grepped for — they are not restricted to a command actually invoking `mkfs` or
+`TRUNCATE`. This is a seatbelt, not a sandbox: like every Claude Code hook, a
+timed-out or otherwise unrunnable hook does not block the tool call, and if no
+`python3` is on `PATH` the launcher exits 0 rather than surface an error. Keep
+your own permission rules for anything you need to hard-deny.
+
 ## Checking the collector
 
 `verdict stats` summarizes the local ledger:

@@ -195,7 +195,7 @@
     "(?s)(?=.*\\bgit\\s+clean\\b)(?=.*(?:-[a-zA-Z]*f[a-zA-Z]*\\b|--force\\b))(?=.*-[a-zA-Z]*[dx][a-zA-Z]*\\b)",
     "\\bdd\\b[^\\n]*\\bof=/dev/",
     "\\bmkfs(\\.\\w+)?\\b",
-    "(?s)(?=.*\\bchmod\\b)(?=.*-R\\b)(?=.*\\b777\\b)(?=.*(?:(?<=\\s)|^)/(?:(?=\\s)|$))",
+    "(?s)(?=.*\\bchmod\\b)(?=.*(?:-[a-zA-Z]*R[a-zA-Z]*\\b|--recursive\\b))(?=.*\\b777\\b)(?=.*(?:(?<=\\s)|^)/(?:(?=\\s)|$))",
     "\\bcurl\\b[^\\n]*\\|\\s*(sudo\\s+)?(sh|bash|zsh)\\b",
     "\\bwget\\b[^\\n]*\\|\\s*(sudo\\s+)?(sh|bash|zsh)\\b",
     "(?i)\\bDROP\\s+DATABASE\\b",
@@ -208,8 +208,8 @@
     "deny_raw_device_write",
     "deny_mkfs",
     "deny_chmod_root",
-    "deny_pipe_to_shell",
-    "deny_pipe_to_shell",
+    "deny_pipe_to_shell_curl",
+    "deny_pipe_to_shell_wget",
     "deny_db_drop",
     "deny_db_truncate"
   ]

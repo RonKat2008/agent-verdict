@@ -297,3 +297,40 @@ def test_import_and_load_policy_delta_under_10ms(tmp_path: Path) -> None:
         f"json/os/re/sys baseline (target median {target_median:.2f}ms, "
         f"baseline median {baseline_median:.2f}ms) -- budget is <10ms"
     )
+
+
+# --- Fix round 1 item 6: denylist/denylist_ids policy-layer tests ----------
+
+
+def test_packaged_default_denylist_and_ids_have_equal_length_and_unique_ids(
+    isolated_verdict_home: Path,
+) -> None:
+    policy = policy_mod.load_policy()
+    assert len(policy.denylist) == len(policy.denylist_ids)
+    assert len(policy.denylist) > 0
+    assert len(set(policy.denylist_ids)) == len(policy.denylist_ids), (
+        f"duplicate rule ids in denylist_ids: {policy.denylist_ids}"
+    )
+
+
+def test_user_override_replaces_both_denylist_and_denylist_ids(
+    isolated_verdict_home: Path,
+) -> None:
+    (isolated_verdict_home).mkdir(parents=True, exist_ok=True)
+    (isolated_verdict_home / "policy.json").write_text(
+        json.dumps({"denylist": ["\\bcustom-danger\\b"], "denylist_ids": ["deny_custom"]}),
+        encoding="utf-8",
+    )
+    policy = policy_mod.load_policy()
+    assert policy.denylist == ("\\bcustom-danger\\b",)
+    assert policy.denylist_ids == ("deny_custom",)
+
+
+def test_denylist_length_mismatch_raises_policy_error(isolated_verdict_home: Path) -> None:
+    (isolated_verdict_home).mkdir(parents=True, exist_ok=True)
+    (isolated_verdict_home / "policy.json").write_text(
+        json.dumps({"denylist": ["a", "b"], "denylist_ids": ["only_one"]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(policy_mod.PolicyError):
+        policy_mod.load_policy()

@@ -159,6 +159,77 @@ def test_sentinel_key_never_reaches_ledger_or_log(tmp_path: Path) -> None:
     assert sentinel.encode() not in proc.stdout
 
 
+# --- Fix round 1, item 4 (Important): input-shape errors exit 0, not 2 ---
+
+
+def test_empty_stdin_exits_0_silently(tmp_path: Path) -> None:
+    proc = _run(tmp_path, b"")
+    assert proc.returncode == 0
+    assert proc.stdout == b""
+    assert proc.stderr == b""
+    assert _rows(tmp_path) == []
+
+
+def test_non_json_stdin_exits_0_silently(tmp_path: Path) -> None:
+    proc = _run(tmp_path, b"not json at all")
+    assert proc.returncode == 0
+    assert proc.stdout == b""
+    assert proc.stderr == b""
+    assert _rows(tmp_path) == []
+
+
+def test_oversized_stdin_exits_0_silently(tmp_path: Path) -> None:
+    oversized = b'{"padding": "' + b"x" * (6 * 1024 * 1024) + b'"}'
+    proc = _run(tmp_path, oversized)
+    assert proc.returncode == 0
+    assert proc.stdout == b""
+    assert proc.stderr == b""
+    assert _rows(tmp_path) == []
+
+
+def test_corrupt_policy_with_a_valid_payload_still_exits_2(tmp_path: Path) -> None:
+    """Distinguishes item 4 (caller input -> exit 0) from item 4's closing
+    line (everything past a parsed payload -> stays exit 2): a valid,
+    well-formed PreToolUse payload with a broken user policy must still
+    fail closed."""
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / "policy.json").write_text("{not valid json at all", encoding="utf-8")
+
+    proc = _run(tmp_path, _payload("rm -rf /"))
+
+    assert proc.returncode == 2
+    assert proc.stdout == b""
+    assert proc.stderr.decode("utf-8").startswith("Verdict rules gate failed (")
+
+
+# --- Fix round 1, item 5 (Important): the pre row write is best-effort ---
+
+
+def test_unwritable_home_with_a_deny_command_still_prints_the_deny_json(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    home.chmod(0o500)
+    try:
+        proc = _run(home, _payload("rm -rf /"))
+        assert proc.returncode == 0
+        stdout = json.loads(proc.stdout.decode("utf-8"))
+        assert stdout["hookSpecificOutput"]["permissionDecision"] == "deny"
+    finally:
+        home.chmod(0o700)
+
+
+def test_unwritable_home_with_a_benign_command_exits_0_with_no_stdout(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    home.chmod(0o500)
+    try:
+        proc = _run(home, _payload("echo hello"))
+        assert proc.returncode == 0
+        assert proc.stdout == b""
+    finally:
+        home.chmod(0o700)
+
+
 @pytest.mark.slow
 def test_pre_gate_p50_latency_under_60ms_through_the_launcher(tmp_path: Path) -> None:
     data = (FIXTURES / "pre_tool_use_bash.json").read_bytes()

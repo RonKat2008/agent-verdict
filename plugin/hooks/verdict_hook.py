@@ -71,6 +71,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from verdict_hot.parsers import PreEvent
+    from verdict_hot.rules import RuleDecision
+
 _MAX_STDIN_BYTES = 5 * 1024 * 1024
 _MODE_OFF = "off"
 _PRE_EVENT_NAME = "pre"
@@ -120,41 +123,85 @@ def _handle_pre(start: float) -> int:
 def _run_pre(start: float) -> int:
     """Parse, decide, record, and (maybe) print -- for one PreToolUse call.
 
-    A payload that isn't PreToolUse-shaped (`parsers.ParseError`) is not an
-    internal error: it exits 0 with empty stdout, same as any tool call the
-    rules gate has no opinion on. Everything past that point (a broken
-    user policy, `rules.decide`, the ledger write) is allowed to raise
+    Fix round 1 item 4: a stdin read/parse failure (empty stdin, non-JSON
+    stdin, an oversized payload, or a payload that isn't PreToolUse-shaped)
+    is the caller's input, not a gate defect -- each of those returns 0
+    with empty stdout via `_log_pre_skipped`, logged as outcome `"skipped"`.
+    Everything past a successfully parsed payload (a broken user policy,
+    `rules.decide`, output serialization) is still allowed to raise
     straight through to `_handle_pre`'s fail-closed wrapper -- in
     particular, `policy.load_policy()` here does NOT fall back to the
     packaged default the way `_run_stop` does: a corrupt override on the
     one path that fails closed must surface as exit 2, not silently run
-    with a policy the user never wrote (controller notes ruling 8).
+    with a policy the user never wrote (controller notes ruling 8). The
+    one exception, per fix round 1 item 5, is the ledger row write itself:
+    that is best-effort (`_record_pre_row_best_effort`), so a `VERDICT_HOME`
+    the process cannot write to still prints the decision and exits 0.
     """
     import time
 
     from verdict_hot import logsafe, parsers, rules
     from verdict_hot import policy as policy_mod
 
-    payload = _read_stdin_json(_MAX_STDIN_BYTES)
+    try:
+        payload = _read_stdin_json(_MAX_STDIN_BYTES)
+    except ValueError:
+        return _log_pre_skipped(start, None)
+
     if not isinstance(payload, dict):
-        return 0
+        return _log_pre_skipped(start, _best_effort_session_id(payload))
 
     try:
         event = parsers.parse_pre_event(payload)
     except parsers.ParseError:
-        return 0
+        return _log_pre_skipped(start, _best_effort_session_id(payload))
 
     active_policy = policy_mod.load_policy()
     decision = rules.decide(event.tool_name, event.tool_input, active_policy, event.cwd)
-    rules.record_pre_row(event, decision, time.time())
+    ledger_err_class = _record_pre_row_best_effort(event, decision)
 
     stdout_json = rules.build_output_json(decision)
     if stdout_json is not None:
         sys.stdout.write(stdout_json)
 
     total_ms = (time.monotonic() - start) * 1000.0
-    logsafe.log_invocation(_PRE_EVENT_NAME, event.session_id, "ok", total_ms)
+    logsafe.log_invocation(_PRE_EVENT_NAME, event.session_id, "ok", total_ms, ledger_err_class)
     return 0
+
+
+def _best_effort_session_id(payload: object) -> str | None:
+    if isinstance(payload, dict):
+        candidate = payload.get("session_id")
+        if isinstance(candidate, str):
+            return candidate
+    return None
+
+
+def _log_pre_skipped(start: float, session_id: str | None) -> int:
+    import time
+
+    from verdict_hot import logsafe
+
+    total_ms = (time.monotonic() - start) * 1000.0
+    logsafe.log_invocation(_PRE_EVENT_NAME, session_id, "skipped", total_ms)
+    return 0
+
+
+def _record_pre_row_best_effort(event: PreEvent, decision: RuleDecision) -> str | None:
+    """Fix round 1 item 5: the `pre` row is best-effort. A write failure
+    (an unwritable `VERDICT_HOME`, a full disk) must never stop the
+    decision from reaching stdout -- only the exception's class name is
+    kept, via `hook.log`'s existing `err_class` field, never `str(exc)`.
+    """
+    import time
+
+    from verdict_hot import rules
+
+    try:
+        rules.record_pre_row(event, decision, time.time())
+    except Exception as exc:  # noqa: BLE001 - the ledger write is best-effort (item 5)
+        return type(exc).__name__
+    return None
 
 
 def _log_windows_disabled(argv: list[str]) -> None:

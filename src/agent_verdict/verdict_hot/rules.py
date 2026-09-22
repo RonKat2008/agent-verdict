@@ -29,10 +29,11 @@ None, False)`) or asking first.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable, Mapping
 from functools import cache
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 from . import PLUGIN_VERSION, SCHEMA_V
 
@@ -43,11 +44,14 @@ if TYPE_CHECKING:
 _GIT_RESET_HARD_RE = re.compile(r"\bgit\s+reset\s+--hard\b")
 _GIT_TOPLEVEL_SUBST = "$(git rev-parse --show-toplevel)"
 _STATIC_DANGEROUS_RM_TARGETS = frozenset({"/", "~", "$HOME", "${HOME}"})
+_ALL_SLASHES_RE = re.compile(r"/+")
 _SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|\||\n")
 _VAR_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_GIT_PUSH_RE = re.compile(r"\bgit\s+push\b")
 _FORCE_FLAG_RE = re.compile(r"--force(?!-with-lease)\b|-f\b")
-_PROTECTED_BRANCH_RE = re.compile(r"\b(?:main|master|prod|production|release)\b")
+_PROTECTED_BRANCH_NAMES = frozenset({"main", "master", "prod", "production", "release"})
 
+_GENERIC_DENY_REASON = "Blocked by a Verdict policy rule."
 _REASONS: dict[str, str] = {
     "deny_rm_root": "Blocked: recursive delete of a protected root path.",
     "deny_force_push_protected": "Blocked: force-push to a protected branch.",
@@ -55,7 +59,8 @@ _REASONS: dict[str, str] = {
     "deny_raw_device_write": "Blocked: raw write to a block device.",
     "deny_mkfs": "Blocked: filesystem format command.",
     "deny_chmod_root": "Blocked: world-writable recursive permission change on the root.",
-    "deny_pipe_to_shell": "Blocked: piping a download directly into a shell.",
+    "deny_pipe_to_shell_curl": "Blocked: piping a download directly into a shell.",
+    "deny_pipe_to_shell_wget": "Blocked: piping a download directly into a shell.",
     "deny_db_drop": "Blocked: database drop statement.",
     "deny_db_truncate": "Blocked: database truncate statement.",
     "ask_never_send_path": "Confirm: this path is excluded from Verdict's own review.",
@@ -65,7 +70,7 @@ _REASONS: dict[str, str] = {
 
 
 class RuleDecision(NamedTuple):
-    decision: str | None  # "deny", "ask", or None
+    decision: Literal["deny", "ask"] | None
     rule_id: str | None
     reason: str | None
     never_send: bool
@@ -83,7 +88,8 @@ def decide(
     if isinstance(command, str):
         rule_id = _match_denylist(command, cwd, policy)
         if rule_id is not None:
-            return RuleDecision("deny", rule_id, _REASONS[rule_id], False)
+            reason = _REASONS.get(rule_id, _GENERIC_DENY_REASON)
+            return RuleDecision("deny", rule_id, reason, False)
 
     if gates.is_never_send(tool_name, tool_input, policy):
         rule_id = "ask_secret_read" if tool_name == "Bash" else "ask_never_send_path"
@@ -120,19 +126,54 @@ def _match_denylist(command: str, cwd: str, policy: Policy) -> str | None:
     return None
 
 
+def _shlex_tokens(segment: str) -> list[str]:
+    """Best-effort shell tokenization: falls back to a plain whitespace split
+    on unbalanced quotes rather than raising (`shlex.split`'s `ValueError`),
+    since a malformed command should just fall through to "no opinion" on
+    this rule, not crash the gate."""
+    import shlex
+
+    try:
+        return shlex.split(segment)
+    except ValueError:
+        return segment.split()
+
+
+def _refspec_branch_candidates(token: str) -> list[str]:
+    """A push refspec token can be `branch`, `+branch` (force marker),
+    `remote/branch`, or `local:remote` -- return every plain branch-name
+    candidate `token` could refer to, so a whole-token match never treats
+    `feature/main-menu` as if it named `main` (fix round 1 item 8)."""
+    candidates: list[str] = []
+    for part in token.lstrip("+").split(":"):
+        if not part:
+            continue
+        candidates.append(part)
+        if "/" in part:
+            candidates.append(part.rsplit("/", 1)[-1])
+    return candidates
+
+
+def _is_protected_branch_token(token: str) -> bool:
+    return any(c in _PROTECTED_BRANCH_NAMES for c in _refspec_branch_candidates(token))
+
+
 def _check_force_push_extra(command: str, _cwd: str) -> bool:
-    return bool(_FORCE_FLAG_RE.search(command)) and bool(_PROTECTED_BRANCH_RE.search(command))
+    """Scoped to one `git push` segment at a time (fix round 1 item 8): a
+    force flag in one `&&`-joined command and an unrelated mention of a
+    protected branch name in another must not combine into a false deny."""
+    for segment in _SEGMENT_SPLIT_RE.split(command):
+        if not _GIT_PUSH_RE.search(segment) or not _FORCE_FLAG_RE.search(segment):
+            continue
+        if any(_is_protected_branch_token(t) for t in _shlex_tokens(segment)):
+            return True
+    return False
 
 
 def _parse_rm_segment(segment: str) -> tuple[bool, list[str]] | None:
     """`(has_recursive_flag, targets)` if `segment` is an `rm` invocation
     (after skipping leading `VAR=value` assignments and `sudo`), else None."""
-    import shlex
-
-    try:
-        tokens = shlex.split(segment)
-    except ValueError:
-        tokens = segment.split()
+    tokens = _shlex_tokens(segment)
 
     index = 0
     while index < len(tokens) and (tokens[index] == "sudo" or _VAR_ASSIGN_RE.match(tokens[index])):
@@ -147,8 +188,25 @@ def _parse_rm_segment(segment: str) -> tuple[bool, list[str]] | None:
     return has_recursive, targets
 
 
+def _strip_trailing_glob(target: str) -> str:
+    """Strip one trailing `/*`, `/.`, or bare `*` (fix round 1 item 1):
+    `rm -rf /*`, `rm -rf /.`, and `rm -rf ~/*` are exactly as destructive
+    as the bare target, and a naive exact-match set missed all three."""
+    for suffix in ("/*", "/."):
+        if target.endswith(suffix):
+            return target[: -len(suffix)] or "/"
+    if target.endswith("*"):
+        return target[:-1] or "/"
+    return target
+
+
 def _normalize_rm_target(target: str) -> str:
-    return target if target == "/" else target.rstrip("/")
+    stripped = _strip_trailing_glob(target)
+    if stripped in _STATIC_DANGEROUS_RM_TARGETS:
+        return stripped
+    if _ALL_SLASHES_RE.fullmatch(stripped):
+        return "/"  # `//`, `///`, ... -- posixpath.normpath keeps "//" as-is
+    return os.path.normpath(stripped)
 
 
 def _check_rm_root_extra(command: str, cwd: str) -> bool:
@@ -174,12 +232,19 @@ def _check_rm_root_extra(command: str, cwd: str) -> bool:
 
 def _find_repo_root(cwd: str) -> str | None:
     """Walk `cwd` up to the first directory holding `.git`, stopping at `/`.
-    Never shells out (controller notes ruling 4): a plain `Path` walk."""
+    Never shells out (controller notes ruling 4): a plain `Path` walk.
+
+    `.resolve()` (fix round 1 item 7) so a symlinked `cwd` -- or a symlinked
+    *ancestor* of `cwd` -- still finds the real repository root: walking
+    `.parent` on the unresolved path only ever climbs the symlink's own
+    location, not the real directory tree the symlink's target lives in.
+    """
     from pathlib import Path
 
     current = Path(cwd)
     if not current.is_absolute():
         return None
+    current = current.resolve()
     while True:
         if (current / ".git").exists():
             return str(current)
