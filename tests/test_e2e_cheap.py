@@ -7,10 +7,30 @@ handful of times total.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import e2e_cheap as ec
 import pytest
+
+
+def _stop_response(
+    payload: dict[str, Any], *, exit_code: int = 0, outcome: str = "success"
+) -> dict[str, Any]:
+    """The verified Stop `hook_response` envelope (VERIFIED_FACTS A22)."""
+    stdout = json.dumps(payload, separators=(",", ":")) + "\n"
+    return {
+        "type": "system",
+        "subtype": "hook_response",
+        "hook_id": "h1",
+        "hook_name": "Stop",
+        "hook_event": "Stop",
+        "output": stdout,
+        "stdout": stdout,
+        "stderr": "",
+        "exit_code": exit_code,
+        "outcome": outcome,
+    }
 
 
 def test_parse_stream_skips_blank_lines_and_non_json() -> None:
@@ -109,20 +129,35 @@ def test_run_stop_scenario_refuses_cleanly_without_an_api_key(
     assert ec.run_stop_scenario("stop-block") == 3
 
 
-def test_find_hook_decisions_locates_the_inner_payload_regardless_of_envelope() -> None:
-    """UNVERIFIED envelope (module docstring): this searches for stop.py's
-    own verified `{"decision": ..., "reason": ...}` stdout shape, wherever
-    the outer stream event happens to nest it."""
+def test_find_hook_decisions_reads_our_stop_hook_response_envelope() -> None:
+    """VERIFIED_FACTS A22: a decision is read only from a Stop `hook_response`
+    whose stdout is our decision JSON; other Stop hooks that echo stdin
+    (as the owner's global hooks do) are ignored."""
     events: list[dict[str, Any]] = [
         {"type": "system", "subtype": "init"},
-        {
-            "type": "stream_event",
-            "hook_event_name": "Stop",
-            "response": {"decision": "block", "reason": "Rule R1 ... step 2 (Bash, exit 1): x"},
-        },
+        {**_stop_response({"decision": "block", "reason": "x"}), "stdout": '{"session_id":"s"}'},
+        _stop_response({"decision": "block", "reason": "Rule R1 ... step 2 (Bash, exit 1): x"}),
     ]
     decisions = ec.find_hook_decisions(events)
     assert decisions == [{"decision": "block", "reason": "Rule R1 ... step 2 (Bash, exit 1): x"}]
+
+
+def test_assert_stop_hook_responses_clean_rejects_a_nonzero_exit() -> None:
+    events = [
+        _stop_response({"decision": "block", "reason": "x"}, exit_code=1, outcome="cancelled")
+    ]
+    with pytest.raises(ec.AssertionFailure, match="not a clean exit 0"):
+        ec.assert_stop_hook_responses_clean(events)
+
+
+def test_stop_block_banner_is_tolerated_only_when_a_block_is_expected() -> None:
+    banner = (
+        '{"type":"system","subtype":"notification","key":"stop-hook-error",'
+        '"text":"Stop hook error occurred","priority":"immediate"}\n'
+    )
+    ec.assert_no_hook_error_text(banner, expect_block=True)
+    with pytest.raises(ec.AssertionFailure):
+        ec.assert_no_hook_error_text(banner, expect_block=False)
 
 
 def test_find_hook_decisions_finds_nothing_in_a_plain_stream() -> None:
@@ -132,7 +167,7 @@ def test_find_hook_decisions_finds_nothing_in_a_plain_stream() -> None:
 
 def test_assert_stop_block_scenario_passes_with_one_named_block() -> None:
     events: list[dict[str, Any]] = [
-        {"response": {"decision": "block", "reason": "step 1 (Bash, exit 1): pytest -q"}}
+        _stop_response({"decision": "block", "reason": "step 1 (Bash, exit 1): pytest -q"})
     ]
     rows: list[dict[str, Any]] = [{"event": "action", "action": "block"}]
     ec.assert_stop_block_scenario(events, rows)  # must not raise
@@ -144,14 +179,14 @@ def test_assert_stop_block_scenario_fails_with_no_decision_in_the_stream() -> No
 
 
 def test_assert_stop_block_scenario_fails_when_reason_does_not_name_the_step() -> None:
-    events: list[dict[str, Any]] = [{"response": {"decision": "block", "reason": "generic"}}]
+    events: list[dict[str, Any]] = [_stop_response({"decision": "block", "reason": "generic"})]
     with pytest.raises(ec.AssertionFailure, match="failing Bash step"):
         ec.assert_stop_block_scenario(events, [{"event": "action", "action": "block"}])
 
 
 def test_assert_stop_block_scenario_fails_with_more_than_one_block_row() -> None:
     events: list[dict[str, Any]] = [
-        {"response": {"decision": "block", "reason": "step 1 (Bash, exit 1): pytest -q"}}
+        _stop_response({"decision": "block", "reason": "step 1 (Bash, exit 1): pytest -q"})
     ]
     rows: list[dict[str, Any]] = [
         {"event": "action", "action": "block"},
@@ -167,7 +202,7 @@ def test_assert_stop_shadow_scenario_passes_with_would_have_block_and_no_decisio
 
 
 def test_assert_stop_shadow_scenario_fails_when_a_decision_leaks_to_the_stream() -> None:
-    events: list[dict[str, Any]] = [{"response": {"decision": "block", "reason": "x"}}]
+    events: list[dict[str, Any]] = [_stop_response({"decision": "block", "reason": "x"})]
     rows: list[dict[str, Any]] = [{"event": "action", "action": "pass", "would_have": "block"}]
     with pytest.raises(ec.AssertionFailure, match="printed a decision"):
         ec.assert_stop_shadow_scenario(events, rows)
