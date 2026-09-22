@@ -18,7 +18,11 @@ never be split across the cut). A redactor exception (`redact` returning
 `gates` (needed only for `post`/`post_fail`, to compute `is_check` and
 `soft_fail_candidate`) and `claims` (needed only for `stop`) are imported
 lazily inside the builders that need them, per the hot-path lazy-import
-rule (global-constraints.md).
+rule (global-constraints.md). Task 6 extended this to `redact` and
+`textnorm` (needed only when a builder actually runs the text pipeline --
+never for `session_start`/`session_end`) and `_tool_output` (needed only
+for `post`), after `-X importtime` profiling showed both were still
+imported at module level for every event (task-6-brief.md).
 
 `post` rows never store a tool's raw file content or an Agent delegation
 prompt in `out_head`/`out_tail` (task-4 fix round 1): `_tool_output.py`
@@ -38,8 +42,9 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
-from . import PLUGIN_VERSION, SCHEMA_V, _tool_output, ledger, parsers, redact, textnorm
+from . import PLUGIN_VERSION, SCHEMA_V, ledger, parsers
 from .parsers import (
     Common,
     HookEvent,
@@ -50,7 +55,13 @@ from .parsers import (
     SessionStartEvent,
     StopEvent,
 )
-from .policy import Policy
+
+if TYPE_CHECKING:
+    # Only used for type annotations below (never instantiated or
+    # isinstance-checked here): guarding it keeps `verdict_hot.policy`
+    # out of every event's import graph except where `_load_policy_fail_open`
+    # already loads it for real (task-6-brief.md's lazy-import pass).
+    from .policy import Policy
 
 _NEVER_SEND_MARKER = "[never-send]"
 _REDACTION_FAILED_MARKER = "[redaction failed]"
@@ -75,6 +86,8 @@ def _process_excerpt(
     """One-field pipeline: returns (excerpt, redaction_hits, sanitized_chars, failed)."""
     if never_send:
         return _NEVER_SEND_MARKER, 0, 0, False
+    from . import redact, textnorm
+
     normalized, removed = textnorm.normalize(raw_text)
     redacted, hits = redact.redact(normalized)
     failed = hits == -1
@@ -99,6 +112,8 @@ def _process_head_tail(
     """Two-field pipeline (out_head/out_tail): same order, split output."""
     if never_send:
         return _NEVER_SEND_MARKER, _NEVER_SEND_MARKER, 0, 0, False
+    from . import redact, textnorm
+
     normalized, removed = textnorm.normalize(raw_text)
     redacted, hits = redact.redact(normalized)
     failed = hits == -1
@@ -125,6 +140,8 @@ def _raw_input_excerpt(tool_name: str, tool_input: Mapping[str, object]) -> str:
             return description
         prompt = tool_input.get("prompt")
         return prompt[:300] if isinstance(prompt, str) else ""
+    from . import _tool_output
+
     return _tool_output.json_compact(dict(tool_input))
 
 
@@ -173,7 +190,7 @@ def _build_prompt_fields(event: PromptEvent, policy: Policy) -> dict[str, object
 
 
 def _build_post_fields(event: PostEvent, policy: Policy) -> dict[str, object]:
-    from . import gates
+    from . import _tool_output, gates
 
     tool_input = event.tool_input
     command = _command_from(tool_input)
@@ -265,6 +282,7 @@ def _never_send_for(tool_name: str, tool_input: Mapping[str, object], policy: Po
 
 def _build_stop_fields(event: StopEvent, policy: Policy) -> dict[str, object]:
     from . import claims as claims_mod
+    from . import redact, textnorm
 
     normalized, removed = textnorm.normalize(event.last_assistant_message)
     redacted, hits = redact.redact(normalized)
