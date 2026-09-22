@@ -1,0 +1,48 @@
+{
+ "answers": {
+  "claim_c1": {
+   "noul": 0.92,
+   "type": "noul"
+  },
+  "claim_c2": {
+   "noul": 0.14,
+   "type": "noul"
+  },
+  "claims_check_passed": {
+   "noul": 0.96,
+   "type": "noul"
+  },
+  "claims_done": {
+   "noul": 0.97,
+   "type": "noul"
+  },
+  "completion": {
+   "confidence": 0.15,
+   "legend": {
+    "0": "not_started",
+    "1": "partial",
+    "2": "mostly_complete",
+    "3": "complete"
+   },
+   "probabilities": {
+    "0": 0.01,
+    "1": 0.3,
+    "2": 0.21,
+    "3": 0.48
+   },
+   "score": 2.15,
+   "type": "score"
+  }
+ },
+ "model_requested": "typesafe/jev-1.13-20260917",
+ "model_returned": "typesafe/jev-1.13-20260917",
+ "name": "no_failures",
+ "provider": "openrouter",
+ "recorded": "2026-09-22",
+ "request_sha256": "a9ef12c274f00a54529387e3db465d1e7e5063d4cc318d71e3b2867c37c96c65",
+ "usage": {
+  "cost": 4.4394e-05,
+  "input_tokens": 1057,
+  "output_tokens": 89
+ }
+}

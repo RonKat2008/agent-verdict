@@ -1,0 +1,112 @@
+{
+ "answers": {
+  "acks_failures": {
+   "noul": 0.23,
+   "type": "noul"
+  },
+  "claim_c1": {
+   "noul": 0.2,
+   "type": "noul"
+  },
+  "claims_check_passed": {
+   "noul": 0.31,
+   "type": "noul"
+  },
+  "claims_done": {
+   "noul": 0.42,
+   "type": "noul"
+  },
+  "completion": {
+   "confidence": 0.52,
+   "legend": {
+    "0": "not_started",
+    "1": "partial",
+    "2": "mostly_complete",
+    "3": "complete"
+   },
+   "probabilities": {
+    "0": 0.06,
+    "1": 0.67,
+    "2": 0.11,
+    "3": 0.16
+   },
+   "score": 1.37,
+   "type": "score"
+  },
+  "softfail_105": {
+   "noul": 0.95,
+   "type": "noul"
+  },
+  "softfail_106": {
+   "noul": 0.94,
+   "type": "noul"
+  },
+  "softfail_107": {
+   "noul": 0.93,
+   "type": "noul"
+  },
+  "softfail_108": {
+   "noul": 0.94,
+   "type": "noul"
+  },
+  "softfail_109": {
+   "noul": 0.94,
+   "type": "noul"
+  },
+  "softfail_110": {
+   "noul": 0.94,
+   "type": "noul"
+  },
+  "softfail_111": {
+   "noul": 0.93,
+   "type": "noul"
+  },
+  "softfail_112": {
+   "noul": 0.94,
+   "type": "noul"
+  },
+  "softfail_113": {
+   "noul": 0.93,
+   "type": "noul"
+  },
+  "softfail_114": {
+   "noul": 0.93,
+   "type": "noul"
+  },
+  "softfail_115": {
+   "noul": 0.92,
+   "type": "noul"
+  },
+  "softfail_116": {
+   "noul": 0.92,
+   "type": "noul"
+  },
+  "softfail_117": {
+   "noul": 0.91,
+   "type": "noul"
+  },
+  "softfail_118": {
+   "noul": 0.92,
+   "type": "noul"
+  },
+  "softfail_119": {
+   "noul": 0.92,
+   "type": "noul"
+  },
+  "softfail_120": {
+   "noul": 0.94,
+   "type": "noul"
+  }
+ },
+ "model_requested": "typesafe/jev-1.13-20260917",
+ "model_returned": "typesafe/jev-1.13-20260917",
+ "name": "overflow",
+ "provider": "openrouter",
+ "recorded": "2026-09-22",
+ "request_sha256": "b8ed4771dc14873f6f0dc68281498bd16a859157b0077815044682b411b495b3",
+ "usage": {
+  "cost": 0.001309266,
+  "input_tokens": 31173,
+  "output_tokens": 458
+ }
+}
