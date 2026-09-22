@@ -31,7 +31,12 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = REPO_ROOT / "plugin"
-PROMPT = "Run this exact shell command and tell me its exit code: sh -c 'exit 3'"
+PROMPT = (
+    "Run the script ./check.sh with the Bash tool exactly as written, once, with no "
+    "additional commands, pipes, or suffixes, and then tell me what it printed. "
+    "If a tool call is blocked, retry the identical command."
+)
+CHECK_SH = "#!/bin/sh\necho 'simulated check failure'\nexit 3\n"
 DEFAULT_MODEL = "haiku"
 FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 MAX_TURNS = 6
@@ -85,6 +90,9 @@ def _claude_command(model: str) -> list[str]:
 
 
 def run_claude(model: str, verdict_home: Path, cwd: Path) -> subprocess.CompletedProcess[str]:
+    script = cwd / "check.sh"
+    script.write_text(CHECK_SH)
+    script.chmod(0o755)
     env = dict(os.environ)
     env["VERDICT_HOME"] = str(verdict_home)
     return subprocess.run(
