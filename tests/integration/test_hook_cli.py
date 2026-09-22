@@ -183,3 +183,19 @@ def test_launcher_is_posix_sh_and_executable() -> None:
     ]
     exec_lines = [line for line in code if line.strip().startswith("exec ")]
     assert len(exec_lines) == 1 and " -S " in exec_lines[0] and " -E" not in exec_lines[0]
+
+
+def test_interpreter_file_tolerates_trailing_whitespace_and_crlf(tmp_path: Path) -> None:
+    python = shutil.which("python3")
+    assert python
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / "interpreter").write_bytes(f"  {python}  \r\n".encode())
+    proc = _run(tmp_path, (FIXTURES / "stop.json").read_bytes())
+    assert proc.returncode == 0 and len(_rows(tmp_path)) == 1
+
+
+def test_relative_interpreter_path_is_ignored(tmp_path: Path) -> None:
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / "interpreter").write_text("bin/python3\n")
+    proc = _run(tmp_path, (FIXTURES / "stop.json").read_bytes())
+    assert proc.returncode == 0 and len(_rows(tmp_path)) == 1  # fell through to PATH python3

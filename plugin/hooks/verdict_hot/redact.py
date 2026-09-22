@@ -188,7 +188,7 @@ def _attribute(spans: set[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
 _ENV_RULE_ID = "env-configured-secret"
 _ENV_SECRET_PREFIX = "CLAUDE_PLUGIN_OPTION_"
 _ENV_SECRET_EXACT_NAMES = frozenset({"OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "ANTHROPIC_API_KEY"})
-_MIN_ENV_SECRET_LEN = 8
+_MIN_ENV_SECRET_LEN = 16  # short option values such as mode=shadow must never be treated as secrets
 
 
 def _env_secret_values() -> tuple[str, ...]:
@@ -207,13 +207,21 @@ def _env_secret_values() -> tuple[str, ...]:
 
 
 def _env_value_spans(text: str) -> set[tuple[int, int, str]]:
-    spans: set[tuple[int, int, str]] = set()
+    raw: list[tuple[int, int]] = []
     for value in _env_secret_values():
         start = text.find(value)
         while start != -1:
-            spans.add((start, start + len(value), _ENV_RULE_ID))
-            start = text.find(value, start + len(value))
-    return spans
+            raw.append((start, start + len(value)))
+            start = text.find(value, start + 1)
+    # Merge overlapping or touching hits into their union so a value that is
+    # a prefix of, or overlaps, another never leaves part of a secret visible.
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(raw):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return {(start, end, _ENV_RULE_ID) for start, end in merged}
 
 
 def _redact_unsafe(text: str) -> tuple[str, tuple[str, ...]]:

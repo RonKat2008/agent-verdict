@@ -30,7 +30,8 @@ if [ -n "${VERDICT_PYTHON:-}" ]; then
 else
     interpreter_file="$home/interpreter"
     if [ -f "$interpreter_file" ]; then
-        candidate="$(cat "$interpreter_file" 2>/dev/null)"
+        candidate="$(tr -d '\r' < "$interpreter_file" 2>/dev/null | sed -n '1s/^[[:space:]]*//;1s/[[:space:]]*$//;1p')"
+        case "$candidate" in /*) ;; *) candidate="" ;; esac  # absolute paths only
         if [ -n "$candidate" ] && [ -x "$candidate" ]; then
             py="$candidate"
         fi
