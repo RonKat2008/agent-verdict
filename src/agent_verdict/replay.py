@@ -9,8 +9,15 @@ provider evaluation -- stand-downs, `gate_unavailable`, and the
 
 - **answers**: the `verdict` rows written immediately before this action
   row for the same `(session_id, prompt_id, agent_id)` key.
-- **span**: rebuilt by `span.build_span` over the session's own rows,
-  never re-derived by hand (controller notes).
+- **span**: rebuilt by `span.build_span`, but only over the rows that
+  existed *before* this stop's own `verdict` rows began (`rows[:
+  verdict_start]`) -- never the whole session file (fix round 1, C1). A
+  later retry, or a later stop's `acks_failures` verdict, is real evidence
+  for a *later* stop, but it did not exist yet when this stop actually
+  ran, so it must never retroactively resolve a failure this stop saw as
+  open. This is `stop.py`'s own `rows_so_far` (read once, before that
+  stop's provider call), reconstructed from the ledger rather than
+  re-derived by hand.
 - **claim_ids**: `c1..cN` where `N` is the length of the `claims` list on
   the most recent `stop` row seen so far for this key -- the same list
   `state.build_state` numbered when the row was first written.
@@ -26,14 +33,18 @@ relevant answer probability for this row falls between the two values;
 The "shipped" policy compared against is always the packaged default
 (`policy.default_policy_path()`) -- this milestone ships exactly one
 policy version, so there is no registry of historical shipped policies to
-look a row's own `policy_version` up in. Revisit this if a second shipped
-version is ever cut while old rows are still being replayed.
+look a row's own `policy_version` up in. When a row's own recorded
+`policy_version` (carried on its `verdict` rows) does not match the
+packaged default's `policy_version`, `moved_by` is printed as `"?"`
+instead of guessing at a threshold comparison against a policy that was
+never actually shipped for that row (fix round 1, I3).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -103,10 +114,22 @@ def _old_action(row: Mapping[str, object]) -> object:
     return would_have if would_have is not None else row.get("action")
 
 
+class SinceError(ValueError):
+    """Raised for a malformed `--since` value."""
+
+
 def _since_cutoff(raw: str | None) -> float | None:
     if raw is None:
         return None
-    return datetime.fromisoformat(raw).replace(tzinfo=UTC).timestamp()
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise SinceError(f"--since must be an ISO date or datetime, got {raw!r}") from exc
+    # A naive value (no tzinfo) is treated as already-UTC; an offset-aware
+    # value is converted to UTC rather than having its own offset silently
+    # discarded (fix round 1, M2).
+    aware = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return aware.astimezone(UTC).timestamp()
 
 
 class _ReplayRow:
@@ -160,6 +183,14 @@ class _ReplayRow:
         )
 
 
+def _row_policy_version(verdict_rows: list[dict[str, object]]) -> str | None:
+    for row in verdict_rows:
+        version = row.get("policy_version")
+        if isinstance(version, str):
+            return version
+    return None
+
+
 def _replay_session(
     session_id: str,
     rows: list[dict[str, object]],
@@ -168,11 +199,12 @@ def _replay_session(
     since: float | None,
 ) -> tuple[list[_ReplayRow], int]:
     pending_verdicts: dict[tuple[object, object], list[dict[str, object]]] = {}
+    verdict_start: dict[tuple[object, object], int] = {}
     stop_claim_counts: dict[tuple[object, object], int] = {}
     out: list[_ReplayRow] = []
     skipped = 0
 
-    for row in rows:
+    for idx, row in enumerate(rows):
         event = row.get("event")
         prompt_id = row.get("prompt_id")
         agent_id = row.get("agent_id")
@@ -184,6 +216,8 @@ def _replay_session(
             continue
 
         if event == "verdict":
+            if key not in pending_verdicts:
+                verdict_start[key] = idx
             pending_verdicts.setdefault(key, []).append(row)
             continue
 
@@ -191,6 +225,15 @@ def _replay_session(
             continue
 
         verdict_rows = pending_verdicts.pop(key, [])
+        # C1 (fix round 1): the decision-time prefix. `idx` here is the
+        # action row's own position, which would already include this
+        # stop's OWN verdict rows (and any later stop's rows too, once we
+        # get further down the file) -- only rows strictly before this
+        # stop's verdict group began were visible when the real Stop hook
+        # actually ran. Falls back to `idx` when there were no verdict
+        # rows at all (a stand-down/gate_unavailable row), which is
+        # filtered out below before the span is ever built.
+        group_start = verdict_start.pop(key, idx)
         ts = row.get("ts")
         if since is not None and isinstance(ts, (int, float)) and ts < since:
             skipped += 1
@@ -206,9 +249,14 @@ def _replay_session(
         }
         claim_ids = tuple(f"c{i}" for i in range(1, stop_claim_counts.get(key, 0) + 1))
         pid_for_span = prompt_id if isinstance(prompt_id, str) else None
-        span = span_mod.build_span(rows, pid_for_span, replay_policy)
+        span = span_mod.build_span(rows[:group_start], pid_for_span, replay_policy)
         decision = verdict_policy.decide(answers, span, replay_policy, claim_ids)
-        moved_by = _moved_by(shipped, replay_policy, answers, span, claim_ids)
+
+        row_policy_version = _row_policy_version(verdict_rows)
+        if row_policy_version is not None and row_policy_version != shipped.policy_version:
+            moved_by = "?"
+        else:
+            moved_by = _moved_by(shipped, replay_policy, answers, span, claim_ids)
 
         out.append(
             _ReplayRow(
@@ -253,7 +301,11 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> int:
     replay_policy = policy_mod.load_policy(Path(args.policy))
-    since = _since_cutoff(args.since)
+    try:
+        since = _since_cutoff(args.since)
+    except SinceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     rows, skipped = replay(replay_policy, since)
 
     for row in rows:
@@ -266,4 +318,4 @@ def main(argv: list[str] | None = None) -> int:
     return run(build_arg_parser().parse_args(argv))
 
 
-__all__ = ["replay", "build_arg_parser", "run", "main"]
+__all__ = ["replay", "build_arg_parser", "run", "main", "SinceError"]

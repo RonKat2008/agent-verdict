@@ -229,3 +229,104 @@ def test_text_mode_prints_one_line_per_row_plus_a_skipped_trailer(
     assert "new=block" in output
     assert "moved_by=" in output
     assert _skipped_count(output) == 1
+
+
+# --- C1: span must be built from the decision-time prefix, not the whole file ---
+
+
+def _build_retry_fixture() -> None:
+    """One session, one prompt_id, two stops: the first sees an unresolved
+    failure and blocks (R1); a retry between the two stops resolves it;
+    the second stop, now with nothing unresolved, passes. Replaying the
+    UNCHANGED shipped policy must reproduce both recorded decisions --
+    building either stop's span from the *whole* session file would let
+    the retry (which is real evidence for stop 2) leak backwards and
+    retroactively "resolve" stop 1's failure too.
+    """
+    _seed("s-retry", _failing_step(prompt_id="p1", tool_use_id="f1"))
+    _run_stop("s-retry", "p1", "All tests pass now.", {"claims_done": 0.9, "acks_failures": 0.0})
+
+    _seed(
+        "s-retry",
+        [
+            {
+                "event": "post",
+                "prompt_id": "p1",
+                "tool_name": "Bash",
+                "tool_use_id": "f2",
+                "input_excerpt": "npm test",
+                "status": "ok",
+                "is_check": False,
+                "soft_fail_candidate": False,
+                "never_send": False,
+                "out_head": "",
+                "out_tail": "",
+            }
+        ],
+    )
+    _run_stop("s-retry", "p1", "Retried the build; still checking.", {})
+
+
+def test_replay_reproduces_both_stops_of_a_retry_within_one_prompt(
+    home: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _build_retry_fixture()
+
+    code = replay.main(["--policy", str(PACKAGED_DEFAULT), "--json"])
+
+    assert code == 0
+    rows = _jsonl_lines(capsys.readouterr().out)
+    assert len(rows) == 2
+    first, second = rows
+
+    # Stop 1: the failure was still unresolved at decision time -> R1 block,
+    # even though it looks resolved by the time the WHOLE file is read.
+    assert first["old"] == "block"
+    assert first["new"] == "block"
+    assert first["rule_id_old"] == "R1"
+    assert first["rule_id_new"] == "R1"
+
+    # Stop 2: by its own decision time the retry really had happened, so it
+    # legitimately sees the failure as resolved.
+    assert second["old"] == "pass"
+    assert second["new"] == "pass"
+
+
+# --- I3: a row from a different policy_version reports moved_by "?" ------------
+
+
+def test_moved_by_is_question_mark_for_a_foreign_policy_version(
+    home: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _seed("s-r1", _failing_step(prompt_id="p1"))
+    _run_stop("s-r1", "p1", "All tests pass now.", {"claims_done": 0.9, "acks_failures": 0.0})
+
+    # Rewrite every verdict row's policy_version to something the packaged
+    # default never shipped.
+    from verdict_hot import paths as paths_mod
+
+    rows = ledger.read_session("s-r1")
+    session_path = paths_mod.session_file("s-r1")
+    rewritten = []
+    for row in rows:
+        if row.get("event") == "verdict":
+            row = {**row, "policy_version": "1999.01.1"}
+        rewritten.append(row)
+    session_path.write_text("\n".join(json.dumps(r) for r in rewritten) + "\n", encoding="utf-8")
+
+    code = replay.main(["--policy", str(PACKAGED_DEFAULT), "--json"])
+
+    assert code == 0
+    rows_out = _jsonl_lines(capsys.readouterr().out)
+    assert len(rows_out) == 1
+    assert rows_out[0]["moved_by"] == "?"
+
+
+# --- M2: a malformed --since value exits 2 with one message, never raises -----
+
+
+def test_since_with_a_malformed_date_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
+    code = replay.main(["--policy", str(PACKAGED_DEFAULT), "--since", "not-a-date"])
+
+    assert code == 2
+    assert capsys.readouterr().err.strip() != ""

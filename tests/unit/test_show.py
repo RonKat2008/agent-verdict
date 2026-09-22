@@ -107,6 +107,19 @@ def test_show_prints_a_timeline_without_raw_output(
     assert "flag" in out
 
 
+def test_malformed_session_id_exits_2_instead_of_raising(
+    cli_verdict_home: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`paths.session_file` raises `ValueError` for an id containing `/` or
+    `..`; `show` must turn that into a one-line message and exit 2, never
+    an uncaught traceback (fix round 1, M1)."""
+    code = show.main(["../etc/passwd"])
+
+    assert code == 2
+    out = capsys.readouterr()
+    assert (out.out + out.err).strip() != ""
+
+
 def test_show_prompt_filter_narrows_to_one_prompt(cli_verdict_home: Path) -> None:
     _seed("s1")
     ledger.append_row(_row("prompt", "s1", prompt_id="p2", prompt_excerpt="second"))

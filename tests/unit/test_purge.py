@@ -121,7 +121,7 @@ def test_confirmation_prompt_accepted_deletes_the_file(
 
 
 def test_non_tty_without_yes_refuses(
-    cli_verdict_home: Path, monkeypatch: pytest.MonkeyPatch
+    cli_verdict_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     target = ledger.append_row(_row("session_start", "s1"))
     non_tty = io.StringIO("y\n")
@@ -131,6 +131,11 @@ def test_non_tty_without_yes_refuses(
 
     assert code == 2
     assert target.exists()
+    # M6 (fix round 1): the refusal happens BEFORE anything about the
+    # would-delete list is printed.
+    out = capsys.readouterr().out
+    assert "would delete" not in out
+    assert "unlabeled corpus session" not in out
 
 
 def test_never_touches_labels_or_hooklog_or_breaker_or_index(cli_verdict_home: Path) -> None:
@@ -151,15 +156,27 @@ def test_never_touches_labels_or_hooklog_or_breaker_or_index(cli_verdict_home: P
 
 
 def test_reports_unlabeled_corpus_sessions_before_confirming(
-    cli_verdict_home: Path, capsys: pytest.CaptureFixture[str]
+    cli_verdict_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     ledger.append_row(_row("session_start", "s1"))
     ledger.append_row(_row("stop", "s1"))
 
-    purge.main(["--session", "s1"], input_stream=io.StringIO("n\n"))
+    purge.main(["--session", "s1"], input_stream=_fake_tty("n\n", monkeypatch))
 
     out = capsys.readouterr().out
     assert "unlabeled corpus session" in out
+
+
+def test_malformed_session_id_exits_2_instead_of_raising(
+    cli_verdict_home: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """fix round 1, M1: `paths.session_file` raises `ValueError` on a
+    malformed id; `purge` must turn that into one message and exit 2."""
+    code = purge.main(["--session", "../etc/passwd", "--yes"])
+
+    assert code == 2
+    out = capsys.readouterr()
+    assert (out.out + out.err).strip() != ""
 
 
 def test_never_follows_a_symlinked_session_file(cli_verdict_home: Path, tmp_path: Path) -> None:

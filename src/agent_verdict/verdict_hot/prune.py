@@ -27,6 +27,7 @@ pipeline to deal with.
 
 from __future__ import annotations
 
+import itertools
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -116,8 +117,15 @@ def _prune_unsafe(policy: Policy, now: float) -> PruneResult:
     examined = 0
     labeled: frozenset[str] | None = None
 
-    for session_path in sorted(paths.events_dir().glob("*.jsonl")):
-        if examined >= _MAX_STAT_CALLS or deleted >= _MAX_DELETES:
+    # M3 (fix round 1): the glob is never sorted or fully materialized --
+    # `sorted(...)` would force listing every session file before the loop
+    # even starts, so the 200-candidate bound would cover only the stat
+    # calls, not the (potentially unbounded) directory listing itself.
+    # `itertools.islice` caps how many directory entries are ever pulled
+    # from the glob generator in the first place.
+    candidates = itertools.islice(paths.events_dir().glob("*.jsonl"), _MAX_STAT_CALLS)
+    for session_path in candidates:
+        if deleted >= _MAX_DELETES:
             break
         if _elapsed_over_budget(start):
             break
@@ -157,4 +165,4 @@ def prune(policy: Policy, now: float | None = None) -> PruneResult:
         return PruneResult(0, 0)
 
 
-__all__ = ["PruneResult", "prune"]
+__all__ = ["PruneResult", "prune", "labeled_session_ids", "has_stop_row"]

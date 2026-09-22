@@ -95,7 +95,6 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
     rows_per_event: dict[str, int] = {}
     min_ts: float | None = None
     max_ts: float | None = None
-    action_rows_total = 0
     action_rows_evidence = 0
     actions_by_kind: dict[str, int] = {}
     would_have_by_kind: dict[str, int] = {}
@@ -121,7 +120,6 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
             if isinstance(claims, (list, tuple)) and len(claims) > 0:
                 stops_with_claim += 1
         elif event == _ACTION_EVENT:
-            action_rows_total += 1
             if row.get("gate_reason") == _EVIDENCE_GATE_REASON:
                 action_rows_evidence += 1
             action = row.get("action")
@@ -145,7 +143,11 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
             min_ts = ts if min_ts is None else min(min_ts, ts)
             max_ts = ts if max_ts is None else max(max_ts, ts)
 
-    jev_reach_rate = action_rows_evidence / action_rows_total if action_rows_total else 0.0
+    # I2 (fix round 1): divided by `stops`, not `action_rows_total` -- a
+    # Stop whose handler raised writes a `stop` row (recorders.record runs
+    # before the verifier) but no `action` row at all, so counting only
+    # action rows would overstate how often the model was actually reached.
+    jev_reach_rate = action_rows_evidence / stops if stops else 0.0
 
     return Stats(
         sessions=len(sessions),

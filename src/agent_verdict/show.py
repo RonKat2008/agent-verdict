@@ -85,7 +85,12 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> int:
     session_id = args.session_id
-    if not paths.session_file(session_id).exists():
+    try:
+        session_path = paths.session_file(session_id)
+    except ValueError as exc:
+        print(f"invalid session id: {exc}", file=sys.stderr)
+        return 2
+    if not session_path.exists():
         print(f"no such session: {session_id}", file=sys.stderr)
         return 1
 

@@ -50,7 +50,7 @@ def _parse_older_than(raw: str) -> float:
 
 def _select_sessions(args: argparse.Namespace, now: float) -> list[Path]:
     if args.session is not None:
-        target = paths.session_file(args.session)
+        target = paths.session_file(args.session)  # raises ValueError on a malformed id
         return [target] if target.exists() else []
     if args.all:
         return sorted(paths.events_dir().glob("*.jsonl"))
@@ -70,12 +70,13 @@ def _is_unlabeled_corpus_session(path: Path, labeled: frozenset[str]) -> bool:
     return path.stem not in labeled and has_stop_row(path)
 
 
-def _confirm(count: int, input_stream: TextIO, auto_yes: bool) -> bool:
-    if auto_yes:
-        return True
-    is_tty = getattr(input_stream, "isatty", lambda: False)()
-    if not is_tty:
-        return False
+def _is_tty(input_stream: TextIO) -> bool:
+    return getattr(input_stream, "isatty", lambda: False)()
+
+
+def _confirm(count: int, input_stream: TextIO) -> bool:
+    """Caller has already checked `_is_tty`/`--yes` (fix round 1, M6): this
+    always does the real interactive prompt."""
     print(f"Delete {count} session file(s)? [y/N] ", end="")
     line = input_stream.readline()
     return line.strip().lower() == "y"
@@ -100,10 +101,21 @@ def run(args: argparse.Namespace, input_stream: TextIO | None = None) -> int:
     except PurgeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    except ValueError as exc:
+        print(f"invalid session id: {exc}", file=sys.stderr)
+        return 2
 
     if not selected:
         print("no sessions match")
         return 0
+
+    # M6 (fix round 1): checked once, and acted on BEFORE anything about the
+    # would-delete list is printed -- a non-tty stream with no `--yes` was
+    # never going to get a confirmation, so it gets nothing else either.
+    is_tty = _is_tty(stream)
+    if not args.yes and not is_tty:
+        print("refusing: no --yes and stdin is not a tty", file=sys.stderr)
+        return 2
 
     labeled = labeled_session_ids()
     unlabeled_corpus = sum(1 for p in selected if _is_unlabeled_corpus_session(p, labeled))
@@ -114,10 +126,7 @@ def run(args: argparse.Namespace, input_stream: TextIO | None = None) -> int:
         f"{unlabeled_corpus} of {len(selected)} selected session(s) are unlabeled corpus sessions"
     )
 
-    if not _confirm(len(selected), stream, args.yes):
-        if not args.yes and not getattr(stream, "isatty", lambda: False)():
-            print("refusing: no --yes and stdin is not a tty", file=sys.stderr)
-            return 2
+    if not args.yes and not _confirm(len(selected), stream):
         print("aborted")
         return 0
 

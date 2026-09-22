@@ -131,6 +131,13 @@ def _action_row(session_id: str, ts: float, **extra: object) -> dict[str, object
 
 
 def _seed_action_rows() -> None:
+    # One `stop` row per real Stop event (written by recorders.record
+    # regardless of what stop.handle does), paired with each `action` row
+    # below -- ruling I2: jev_reach_rate is evidence-action-rows divided by
+    # STOP rows, not action rows, since a Stop whose handler raised writes
+    # a `stop` row and no `action` row at all.
+    for ts in (1.0, 2.0, 3.0, 4.0, 5.0):
+        ledger.append_row(_stop_row("s1", ts))
     ledger.append_row(_action_row("s1", 1.0, action="pass", gate_reason="evidence"))
     ledger.append_row(
         _action_row("s1", 2.0, action="pass", would_have="block", gate_reason="evidence")
@@ -142,6 +149,21 @@ def _seed_action_rows() -> None:
     ledger.append_row(_action_row("s1", 5.0, action="gate_unavailable", gate_reason="no_key"))
 
 
+def _stop_row(session_id: str, ts: float) -> dict[str, object]:
+    return {
+        "schema_v": 1,
+        "session_id": session_id,
+        "event": "stop",
+        "ts": ts,
+        "prompt_id": None,
+        "agent_id": None,
+        "stop_hook_active": False,
+        "final_message_excerpt": "",
+        "claims": [],
+        "background_tasks_n": 0,
+    }
+
+
 def test_jev_reach_rate_and_action_breakdowns(cli_verdict_home: Path) -> None:
     _seed_action_rows()
 
@@ -151,6 +173,18 @@ def test_jev_reach_rate_and_action_breakdowns(cli_verdict_home: Path) -> None:
     assert result.actions_by_kind == {"pass": 3, "flag": 1, "gate_unavailable": 1}
     assert result.would_have_by_kind == {"block": 1}
     assert result.gate_unavailable_count == 1
+
+
+def test_jev_reach_rate_divides_by_stop_rows_not_action_rows(cli_verdict_home: Path) -> None:
+    """A Stop whose handler raised writes a `stop` row (recorders.record
+    runs first) and no `action` row at all -- ruling I2."""
+    _seed_action_rows()
+    # A sixth Stop event that never got as far as writing an action row.
+    ledger.append_row(_stop_row("s1", 6.0))
+
+    result = stats.compute_stats()
+
+    assert result.jev_reach_rate == pytest.approx(3 / 6)
 
 
 def test_jev_reach_rate_is_zero_with_no_action_rows(cli_verdict_home: Path) -> None:
