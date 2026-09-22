@@ -18,10 +18,10 @@ these fields and nothing else:
   (`post` only -- always false-equivalent on `post_fail`), `never_send`,
   `out_head` + `out_tail` (`post`), `error_excerpt` (`post_fail`),
   `exit_code` (`post_fail`), `prompt_id`.
-- `prompt`: `prompt_id`, `prompt_excerpt`.
-- `session_start`: `prompt_id` (always null in practice), `source`.
+- `prompt`/`session_start`: `prompt_id` (null for `session_start`), `prompt_excerpt`/`source`.
 - `action` (Task 4, guard.py): `prompt_id`, `action` (e.g. `"pass"`),
-  `open_failures` -- a list of `tool_use_id`s unresolved at that stop.
+  `open_failures` (unresolved `tool_use_id`s), `gate_reason` (fix round 1
+  item 2: excludes a stand-down row from ever being a clean stop).
 - `verdict` (Task 4, provider.py/verdict_policy.py): `prompt_id`,
   `question_key`, `answer` (a dict with a numeric `noul` field, 0..1),
   `listed_failures` -- a list of `tool_use_id`s the question was asked
@@ -35,11 +35,10 @@ Normalization for "same command" (task-1-brief.md controller notes):
 leading `VAR=value` assignments and known wrapper commands are stripped
 the same way `gates.py`'s G-CHECK tagging does, by reusing its private
 `_strip_leading` helper (lazy import: `gates.py` has no import-time side
-effects -- it only imports `os`, `re`, `functools.cache`, and `.policy`,
-same as this hot-path module's own lazy-import convention). Whitespace is
-then collapsed and the comparison is case-sensitive. For a file tool the
-comparison is just the (whitespace-collapsed) `input_excerpt`, i.e. the
-path, per the brief -- no wrapper-stripping applies there.
+effects, same as this hot-path module's own lazy-import convention).
+Whitespace is then collapsed and the comparison is case-sensitive. For a
+file tool the comparison is just the (whitespace-collapsed) `input_excerpt`,
+i.e. the path, per the brief -- no wrapper-stripping applies there.
 """
 
 from __future__ import annotations
@@ -52,6 +51,25 @@ from .policy import Policy
 _MUTATING_FILE_TOOLS = ("Write", "Edit", "NotebookEdit")
 _BASH_TOOL = "Bash"
 _STEP_EVENTS = ("post", "post_fail")
+
+# Stand-down `gate_reason` values (fix round 1 item 2): an `action` row
+# written for one of these never counts as a clean stop in `_has_clean_stop`
+# even though `action == "pass"` -- the verifier never ran. `stop.py`
+# imports these same names, so the two modules cannot drift apart.
+GATE_REASON_SKIPPED_PLAN_MODE = "skipped_plan_mode"
+GATE_REASON_SKIPPED_BACKGROUND = "skipped_background"
+GATE_REASON_SKIPPED_GUARD = "skipped_guard"
+GATE_REASON_LOCAL_ONLY = "local_only"
+GATE_REASON_CASSETTE_MISSING = "cassette_missing"
+GATE_REASON_NO_KEY = "no_key"
+STAND_DOWN_GATE_REASONS = (
+    GATE_REASON_SKIPPED_PLAN_MODE,
+    GATE_REASON_SKIPPED_BACKGROUND,
+    GATE_REASON_SKIPPED_GUARD,
+    GATE_REASON_LOCAL_ONLY,
+    GATE_REASON_CASSETTE_MISSING,
+    GATE_REASON_NO_KEY,
+)
 
 
 class Step(NamedTuple):
@@ -267,6 +285,7 @@ def _has_clean_stop(block_rows: list[Mapping[str, object]]) -> bool:
         if (
             row.get("event") == "action"
             and row.get("action") == "pass"
+            and row.get("gate_reason") not in STAND_DOWN_GATE_REASONS
             and not row.get("open_failures")
         ):
             return True
@@ -367,4 +386,15 @@ def build_span(
     return _build_from_rows(span_rows, span_prompt_ids, reason, t_ack_hi)
 
 
-__all__ = ["Step", "Span", "build_span"]
+__all__ = [
+    "GATE_REASON_CASSETTE_MISSING",
+    "GATE_REASON_LOCAL_ONLY",
+    "GATE_REASON_NO_KEY",
+    "GATE_REASON_SKIPPED_BACKGROUND",
+    "GATE_REASON_SKIPPED_GUARD",
+    "GATE_REASON_SKIPPED_PLAN_MODE",
+    "STAND_DOWN_GATE_REASONS",
+    "Step",
+    "Span",
+    "build_span",
+]

@@ -72,6 +72,32 @@ EVENT_ROWS: dict[str, dict[str, Any]] = {
         background_tasks_n=0,
     ),
     "session_end": _row("session_end", "evt", reason="clear"),
+    "verdict": _row(
+        "verdict",
+        "evt",
+        question_key="claims_done",
+        question_type="noul",
+        answer={"type": "noul", "noul": 0.9},
+        provider="openrouter",
+        model_returned="typesafe/jev-1.13-20260917",
+        input_tokens=42,
+        conn_ms=1.0,
+        infer_ms=2.0,
+        policy_version="2026.09.1",
+    ),
+    "action": _row(
+        "action",
+        "evt",
+        action="pass",
+        would_have=None,
+        rule_id=None,
+        threshold_used=None,
+        mode="shadow",
+        reason_hash=None,
+        gate_reason="no_evidence",
+        hook_ms=5.0,
+        open_failures=[],
+    ),
 }
 
 

@@ -200,7 +200,7 @@ def load_policy(path: Path | None = None) -> Policy:
     if path is not None:
         return _build_policy(_read_json_object(path))
 
-    default_dict = _read_json_object(_default_policy_path())
+    default_dict = _read_json_object(default_policy_path())
     user_path = paths.verdict_home() / _POLICY_FILENAME
     if user_path.exists():
         user_dict = _read_json_object(user_path)
@@ -208,7 +208,11 @@ def load_policy(path: Path | None = None) -> Policy:
     return _build_policy(default_dict)
 
 
-def _default_policy_path() -> Path:
+def default_policy_path() -> Path:
+    """The packaged default policy's path (fix round 1 item 14: promoted
+    from `_default_policy_path` to a public name so `verdict_hook.py` and
+    `recorders.py` can build the same fail-open fallback `load_policy`
+    without reaching into this module's private API)."""
     override = os.environ.get("VERDICT_POLICY_DEFAULT")
     if override:
         return Path(override)

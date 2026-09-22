@@ -9,14 +9,22 @@ blocks past the whole Stop budget must still let the hook return within
 that budget (task-4-brief.md's budget test: "a transport that sleeps 3 s
 yields `gate_unavailable` within 2.6 s"). The thread is a daemon and is
 never joined again once its wait expires, so a still-running call cannot
-hold the process open past normal exit.
+hold the process open past normal exit; no ledger write ever happens on
+that thread (D-032). `Breaker._write` is itself atomic (breaker.py).
 
 Retry policy (controller notes ruling 2): after a failed call with
 `error` in `{"timeout", "connect_error"}` or any `http_5xx`, retry exactly
 once, only if at least `policy.provider.retry_min_remaining_s` of the
 total `policy.provider.budget_s` remains; each call's own deadline is
 `min(policy.provider.deadline_s, remaining_budget)`. Never retry on a 4xx,
-`breaker_open`, `no_key`, or an `invalid_*` error.
+`breaker_open`, `no_key`, or an `invalid_*` error. Fix round 1 item 10:
+with the shipped defaults (`deadline_s` 1.8, `budget_s` 2.5,
+`retry_min_remaining_s` 1.2), a retry is arithmetically reachable only
+after a FAST failure -- a `connect_error` or 5xx that returns well under
+1.3s -- since the first call alone can consume up to 1.8s of the 2.5s
+budget, leaving under 1.2s for anything slower to still qualify for a
+retry. A `timeout` failure, by construction, has already spent the whole
+deadline and essentially never leaves 1.2s remaining.
 """
 
 from __future__ import annotations
@@ -109,7 +117,8 @@ def call_provider(
     if remaining <= 0:
         return TIMEOUT_RESULT
     deadline = min(policy.provider.deadline_s, remaining)
-    args = (state, questions, preset, api_key, deadline, transport)
+    breaker_open_s = policy.provider.breaker_open_s
+    args = (state, questions, preset, api_key, deadline, transport, breaker_open_s)
     result = _call_with_timeout(provider_mod.evaluate, args, remaining)
     if result is None:
         return TIMEOUT_RESULT
@@ -119,7 +128,7 @@ def call_provider(
     if remaining2 < policy.provider.retry_min_remaining_s:
         return result
     deadline2 = min(policy.provider.deadline_s, remaining2)
-    args2 = (state, questions, preset, api_key, deadline2, transport)
+    args2 = (state, questions, preset, api_key, deadline2, transport, breaker_open_s)
     retried = _call_with_timeout(provider_mod.evaluate, args2, remaining2)
     return retried if retried is not None else result
 

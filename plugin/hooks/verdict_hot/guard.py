@@ -62,6 +62,14 @@ def _count(
     return blocks, frozenset(hashes)
 
 
+def limit(policy: Policy) -> int:
+    """The effective block budget (fix round 1 item 8): `stop.py`'s
+    pre-evidence stand-down check and `check`'s authoritative admission
+    decision must agree on this number, so both call this instead of each
+    computing `min(max_blocks_per_prompt, ceiling)` on its own."""
+    return min(policy.stop.max_blocks_per_prompt, policy.stop.ceiling)
+
+
 def blocks_issued(
     action_rows: Sequence[Mapping[str, object]],
     session_id: str,
@@ -83,13 +91,12 @@ def check(
     policy: Policy,
 ) -> GuardResult:
     """Authoritative admission check for a real block about to be issued."""
-    limit = min(policy.stop.max_blocks_per_prompt, policy.stop.ceiling)
     count, hashes = _count(action_rows, session_id, prompt_id, agent_id)
     if reason_hash in hashes:
         return GuardResult(False, count, "duplicate_reason")
-    if count >= limit:
+    if count >= limit(policy):
         return GuardResult(False, count, "budget_spent")
     return GuardResult(True, count, "ok")
 
 
-__all__ = ["GuardResult", "blocks_issued", "check"]
+__all__ = ["GuardResult", "blocks_issued", "check", "limit"]

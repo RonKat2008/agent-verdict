@@ -2,14 +2,18 @@
 
 `agent-verdict` is a Claude Code plugin that records what happened during a session:
 which commands ran, whether they succeeded or failed, and what the assistant said at the
-end of the turn. It writes this into a local, append-only ledger on your own machine, so
-you can later check whether a session's final message matched what its tools actually
-did. It does this through Claude Code's own hooks, with no separate service to run and,
-in this version, no network calls from the recording path at all. (The one command that
-does touch the network is `verdict doctor`, and only to check provider reachability —
-see below.)
+end of the turn. It writes this into a local, append-only ledger on your own machine. At
+Stop and SubagentStop it also verifies the assistant's final message against that
+ledger, sending a redacted evidence summary — never file contents, never raw tool
+output — to the selected provider for judging. It does this through Claude Code's own
+hooks, with no separate service to run. Recording itself makes no network calls at all;
+verification is the one part of this plugin that does, and `provider: local-only` turns
+it off (recording continues; nothing is ever sent). `verdict doctor` also touches the
+network, only to check provider reachability — see below.
 
-**Status: v0.1 collector. Records locally, sends nothing.**
+**Status: M2 shadow verifier. `mode: shadow` (the default) records what enforce mode
+would have done but never blocks or prints anything; `mode: enforce` can block a Stop
+on strong evidence.**
 
 ## Install
 
@@ -77,8 +81,9 @@ checked before any other work, in every hook.
 
 The plugin's `mode` option does the same thing persistently: `mode: off` is read before
 anything else is imported, so nothing at all is written — not even a hook log line.
-`shadow` (the default) records everything and never blocks; `enforce` is reserved for a
-later version and records exactly like `shadow` today.
+`shadow` (the default) records everything, including what the Stop verifier would have
+done, but never blocks or prints anything. `enforce` can actually block a Stop on strong
+evidence (PLAN.md 5.3's R1–R4 rules) or leave a non-blocking note on weaker evidence.
 
 ## Measured overhead
 

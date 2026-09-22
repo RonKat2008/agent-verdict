@@ -262,3 +262,17 @@ def test_policy_mode_off_skips_the_row_but_still_logs(tmp_path: Path) -> None:
     assert proc.returncode == 0 and proc.stdout == b""
     assert _rows(tmp_path) == []
     assert [entry["outcome"] for entry in _log(tmp_path)] == ["skipped"]
+
+
+def test_corrupt_user_policy_on_a_stop_payload_still_exits_0(tmp_path: Path) -> None:
+    """Fix round 1 item 1 (Critical): a corrupt `~/.verdict/policy.json`
+    must never crash the Stop branch and exit non-zero, whether or not the
+    fallback to the packaged default happens to recover."""
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / "policy.json").write_text("{not valid json at all", encoding="utf-8")
+
+    proc = _run(tmp_path, (FIXTURES / "stop.json").read_bytes())
+
+    assert proc.returncode == 0
+    assert proc.stdout == b""
+    assert proc.stderr == b""

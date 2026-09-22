@@ -380,7 +380,7 @@ def _load_policy_fail_open() -> Policy:
     try:
         return policy_mod.load_policy()
     except policy_mod.PolicyError:
-        return policy_mod.load_policy(path=policy_mod._default_policy_path())
+        return policy_mod.load_policy(path=policy_mod.default_policy_path())
 
 
 def record(payload: Mapping[str, object]) -> str:

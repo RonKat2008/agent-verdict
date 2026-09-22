@@ -86,13 +86,17 @@ def _post_fail(
 
 
 def _action(
-    prompt_id: str | None, action_value: str = "pass", open_failures: list[str] | None = None
+    prompt_id: str | None,
+    action_value: str = "pass",
+    open_failures: list[str] | None = None,
+    gate_reason: str | None = None,
 ) -> dict[str, Any]:
     return {
         "event": "action",
         "prompt_id": prompt_id,
         "action": action_value,
         "open_failures": [] if open_failures is None else open_failures,
+        "gate_reason": gate_reason,
     }
 
 
@@ -160,6 +164,44 @@ def test_prompt_with_its_own_clean_stop_and_a_failure_is_excluded() -> None:
     assert result.span_prompt_ids == ("B",)
     assert result.reason == "clean_stop"
     assert all(step.prompt_id != "A" for step in result.steps)
+    assert result.unresolved_failures == ()
+
+
+def test_a_stand_down_action_row_is_never_a_clean_stop() -> None:
+    """Fix round 1 item 2 (Critical): a plan-mode stand-down's `action="pass"`
+    row must not be read as a clean stop -- the verifier never actually ran,
+    so an earlier failure must still carry forward into the next span."""
+    rows = [
+        _prompt("p1"),
+        _post_fail("p1", command="pytest", tool_use_id="f1"),
+        _action("p1", action_value="pass", gate_reason=span.GATE_REASON_SKIPPED_PLAN_MODE),
+        _prompt("p2"),
+        _post("p2", command="echo hi", tool_use_id="e1"),
+    ]
+
+    result = span.build_span(rows, "p2", _POLICY)
+
+    assert result.reason != "clean_stop"
+    assert result.span_prompt_ids == ("p1", "p2")
+    assert result.unresolved_failures != ()
+
+
+def test_a_real_no_evidence_pass_is_still_a_clean_stop() -> None:
+    """Fix round 1 item 2: a real evaluated pass (the verifier ran, found
+    nothing to judge or nothing wrong) IS a legitimate clean-stop boundary
+    -- only the stand-down `gate_reason` values are excluded."""
+    rows = [
+        _prompt("p1"),
+        _post_fail("p1", command="pytest", tool_use_id="f1"),
+        _action("p1", action_value="pass", gate_reason="no_evidence_needed"),
+        _prompt("p2"),
+        _post("p2", command="echo hi", tool_use_id="e1"),
+    ]
+
+    result = span.build_span(rows, "p2", _POLICY)
+
+    assert result.reason == "clean_stop"
+    assert result.span_prompt_ids == ("p2",)
     assert result.unresolved_failures == ()
 
 

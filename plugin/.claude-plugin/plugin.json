@@ -1,7 +1,7 @@
 {
   "name": "agent-verdict",
   "version": "0.1.0",
-  "description": "Records Claude Code tool outcomes to a local, private ledger for later review. This version sends nothing over the network.",
+  "description": "Records Claude Code tool outcomes to a local, private ledger for later review, and at Stop/SubagentStop verifies the assistant's final message against that ledger. Verification sends a redacted evidence summary (never file contents, never raw tool output) to the selected provider; set provider to local-only to disable that and never touch the network. Recording itself never touches the network.",
   "author": {
     "name": "Ronit Katikaneni"
   },

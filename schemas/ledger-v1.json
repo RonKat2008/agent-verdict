@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Verdict ledger row v1",
-  "description": "M1 events only: session_start, prompt, post, post_fail, stop, session_end.",
+  "description": "M1 events (session_start, prompt, post, post_fail, stop, session_end) plus the M2 Stop verifier's own events (verdict, action).",
   "type": "object",
   "additionalProperties": true,
   "required": ["schema_v", "ts", "event", "session_id", "prompt_id", "agent_id"],

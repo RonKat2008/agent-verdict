@@ -154,3 +154,9 @@ Entries D-001 to D-021 were made during planning on 2026-09-20, before any code 
 **Context.** The five golden states were sent to OpenRouter on 2026-09-22. Measured density was 2.8 to 3.9 characters per token (dense JSON with ids and repeated keys tokenizes worse than prose), and the chars / 4 estimate in D-010 undercounted by 25 to 43 percent. The 22,000-token "cap" state produced 31,173 real tokens, because the estimate was low and the question text (about 3,200 tokens) was not counted at all. The served model's context is 32,000 (C4).
 **Decision.** Estimate tokens as `len(json) // 3`. `state.max_tokens` is 16,000 (about 48,000 chars, about 17,100 real tokens at the worst measured density), which leaves roughly 15,000 tokens for the question set and a 1.5x estimate miss. `state.target_tokens` stays 4,000. The `acks_failures` instruction lists at most 8 step numbers and then "and N more steps" (C9: counting is a documented weakness). Every verdict row stores the provider's real `input_tokens` so the estimate can be re-fitted from field data.
 **Reopen if.** Field data shows real tokens exceeding 24,000 for any request, or the provider's context changes.
+
+### D-032 Stop budget bound by a daemon thread
+**Context.** An injected transport cannot be interrupted, and the real client's per-phase deadline only bounds sockets.
+**Decision.** `_stop_provider` runs `provider.evaluate` on a daemon thread and joins for the remaining budget; an abandoned call is never joined again, no ledger write happens on that thread, and `Breaker` writes are atomic (temp file plus `os.replace`).
+**Reason.** `SIGALRM` would be simpler but couples the hook to process-wide signal state.
+**Reopen if.** A hook ever runs where daemon threads block interpreter exit.

@@ -332,11 +332,12 @@ def _evaluate(
     api_key: str,
     deadline_s: float,
     transport: Transport | None,
+    breaker_open_s: float | None,
 ) -> ProviderResult:
     if not api_key:
         return _failure("no_key")
 
-    breaker = Breaker()
+    breaker = Breaker() if breaker_open_s is None else Breaker(open_s=breaker_open_s)
     wall_now = time.time()
     if breaker.is_open(wall_now):
         return _failure("breaker_open")
@@ -373,11 +374,13 @@ def evaluate(
     api_key: str,
     deadline_s: float,
     transport: Transport | None = None,
+    breaker_open_s: float | None = None,
 ) -> ProviderResult:
     """Call System One once. Never raises except `MissingCassette` (module
-    docstring). No retry: the caller (Task 4) decides whether to retry."""
+    docstring). No retry: the caller decides. `breaker_open_s` overrides the
+    breaker's open duration (`policy.provider.breaker_open_s`; 600s if omitted)."""
     try:
-        return _evaluate(state, questions, preset, api_key, deadline_s, transport)
+        return _evaluate(state, questions, preset, api_key, deadline_s, transport, breaker_open_s)
     except MissingCassette:
         raise
     except Exception as exc:  # noqa: BLE001 - fail-open: never propagate, never leak exc content

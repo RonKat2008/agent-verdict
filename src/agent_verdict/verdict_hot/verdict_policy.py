@@ -1,7 +1,7 @@
-"""Policy rules R1-R4 (PLAN.md 5.3, task-4-brief.md).
+"""Policy rules R1-R4 (PLAN.md 5.3, task-4-brief.md; fix round 1).
 
-`decide(answers, span, policy)` implements the rules table exactly, in
-order, first match wins:
+`decide(answers, span, policy, claim_ids)` implements the rules table
+exactly, in order, first match wins:
 
     R1 unreported failure  -- unresolved error row (a fact) AND
                                claims_done >= t_done AND acks_failures <= t_ack -> block
@@ -26,7 +26,19 @@ The `reason` string is built ONLY from step facts already carried on
 `Span.steps` -- seq, tool, exit code, and a whitespace-collapsed command
 truncated to 80 characters (D-016, global-constraints.md) -- never from
 `state.untrusted` (raw output, claims text, the assistant's own words).
-It is capped at 2,000 characters total.
+It is capped at 2,000 characters total; `_build_reason` budgets the step
+lines it keeps so the fixed outro can never be truncated away (fix round 1
+item 13), dropping the newest offending steps first when there are more
+than fit.
+
+`claim_ids` (fix round 1 item 12) is the exact set of claim ids
+`questions.build_questions` actually asked (`claim_<id>` for each), so
+`_r4` only ever reads answers this run really asked for -- never an
+answer keyed by a `claim_*`-shaped name the provider's own response might
+have echoed back on its own, since `answers` is otherwise untrusted
+response content, not ground truth about what was asked. Callers derive
+`claim_ids` from the same claim list `state.build_state` numbered
+(`c1`, `c2`, ... in order), since `Span` itself carries no claims.
 """
 
 from __future__ import annotations
@@ -73,10 +85,22 @@ def _step_line(step: Step) -> str:
 
 
 def _build_reason(intro: str, steps: tuple[Step, ...]) -> str:
-    lines = [intro]
-    lines.extend(_step_line(s) for s in steps)
-    lines.append(_OUTRO)
-    return "\n".join(lines)[:_MAX_REASON_CHARS]
+    """Fix round 1 item 13: the outro always survives. Step lines are kept
+    oldest-first only while there is still room for the outro (plus its own
+    leading newline) at the end; the rest are simply dropped, never left to
+    a blind `[:2000]` slice that could cut the outro off mid-word."""
+    reserved = len(intro) + 1 + len(_OUTRO)
+    budget = _MAX_REASON_CHARS - reserved
+    kept: list[str] = []
+    used = 0
+    for step in steps:
+        line = _step_line(step)
+        added = len(line) + 1  # its own leading "\n" once joined
+        if used + added > budget:
+            break
+        kept.append(line)
+        used += added
+    return "\n".join([intro, *kept, _OUTRO])
 
 
 def _steps_by_seq(span: Span) -> dict[int, Step]:
@@ -93,14 +117,22 @@ def _acks_ok(answers: Mapping[str, object], t_ack: float) -> bool:
     return value <= t_ack
 
 
+def _done_and_unacked(answers: Mapping[str, object], policy: Policy) -> bool:
+    """`claims_done >= t_done AND acks_failures <= t_ack` (fix round 1 item
+    7): shared by R1 and R3 so the two predicates cannot silently drift
+    apart from each other."""
+    t = policy.thresholds
+    claims_done = _noul(answers, "claims_done")
+    if claims_done is None or claims_done < t.t_done:
+        return False
+    return _acks_ok(answers, t.t_ack)
+
+
 def _r1(answers: Mapping[str, object], span: Span, policy: Policy) -> Decision | None:
     if not span.unresolved_failures:
         return None
     t = policy.thresholds
-    claims_done = _noul(answers, "claims_done")
-    if claims_done is None or claims_done < t.t_done:
-        return None
-    if not _acks_ok(answers, t.t_ack):
+    if not _done_and_unacked(answers, policy):
         return None
     by_seq = _steps_by_seq(span)
     steps = tuple(by_seq[seq] for seq in span.unresolved_failures if seq in by_seq)
@@ -132,10 +164,7 @@ def _r3(answers: Mapping[str, object], span: Span, policy: Policy) -> Decision |
     if not span.soft_fail_seqs:
         return None
     t = policy.thresholds
-    claims_done = _noul(answers, "claims_done")
-    if claims_done is None or claims_done < t.t_done:
-        return None
-    if not _acks_ok(answers, t.t_ack):
+    if not _done_and_unacked(answers, policy):
         return None
     offending = tuple(
         seq
@@ -155,13 +184,14 @@ def _r3(answers: Mapping[str, object], span: Span, policy: Policy) -> Decision |
     return Decision("block", "R3", t.t_soft, offending, reason)
 
 
-def _r4(answers: Mapping[str, object], policy: Policy) -> Decision | None:
+def _r4(
+    answers: Mapping[str, object], policy: Policy, claim_ids: tuple[str, ...]
+) -> Decision | None:
     t = policy.thresholds
     claim_values = [
         value
-        for key in answers
-        if key.startswith("claim_")
-        for value in (_noul(answers, key),)
+        for claim_id in claim_ids
+        for value in (_noul(answers, f"claim_{claim_id}"),)
         if value is not None
     ]
     if not claim_values or min(claim_values) > t.t_claim:
@@ -174,12 +204,14 @@ def _r4(answers: Mapping[str, object], policy: Policy) -> Decision | None:
     return Decision("flag", "R4", t.t_claim, (), reason)
 
 
-def decide(answers: Mapping[str, object], span: Span, policy: Policy) -> Decision:
+def decide(
+    answers: Mapping[str, object], span: Span, policy: Policy, claim_ids: tuple[str, ...]
+) -> Decision:
     for rule in (_r1, _r2, _r3):
         decision = rule(answers, span, policy)
         if decision is not None:
             return decision
-    decision = _r4(answers, policy)
+    decision = _r4(answers, policy, claim_ids)
     if decision is not None:
         return decision
     return _PASS

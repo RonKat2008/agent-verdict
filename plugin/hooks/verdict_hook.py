@@ -38,6 +38,14 @@ not from `argv` -- `argv` remains only a cosmetic label for `hook.log`
 nothing here depends on that agreement). `stop.handle` never raises
 (module docstring); when it returns a non-`None` `stdout_json` it is
 printed verbatim, still followed by exit 0 in every case.
+
+Fix round 1 item 1: `_run_stop` itself is NOT trusted to be exception-free
+the way `stop.handle` is -- policy loading, the import of `verdict_hot.stop`,
+and the final `sys.stdout.write` can all still raise (a broken packaged
+default, an import failure, a closed stdout pipe). The call site wraps it
+in its own `try/except Exception`, so a failure there degrades to the same
+`(session_id, "exception", err_class)` outcome the rest of `_handle`
+already uses, instead of propagating out of `main` and exiting non-zero.
 """
 
 from __future__ import annotations
@@ -120,7 +128,10 @@ def _handle(start: float) -> tuple[str | None, str, str | None]:
         return session_id, "exception", type(exc).__name__
 
     if isinstance(payload, dict) and payload.get("hook_event_name") in _STOP_EVENT_NAMES:
-        outcome = _run_stop(cast(Mapping[str, object], payload), start)
+        try:
+            outcome = _run_stop(cast(Mapping[str, object], payload), start)
+        except Exception as exc:  # noqa: BLE001 - fail-open contract (fix round 1 item 1)
+            return session_id, "exception", type(exc).__name__
 
     return session_id, outcome, None
 
@@ -139,7 +150,7 @@ def _run_stop(payload: Mapping[str, object], start: float) -> str:
     try:
         active_policy = policy_mod.load_policy()
     except policy_mod.PolicyError:
-        active_policy = policy_mod.load_policy(path=policy_mod._default_policy_path())
+        active_policy = policy_mod.load_policy(path=policy_mod.default_policy_path())
 
     if active_policy.mode.strip().lower() == _MODE_OFF:
         return "skipped"

@@ -289,6 +289,27 @@ def test_evaluate_breaker_open_never_calls_transport(isolated_verdict_home: Path
     assert result.error == "breaker_open"
 
 
+def test_evaluate_breaker_open_s_overrides_the_default_duration(
+    isolated_verdict_home: Path,
+) -> None:
+    """Fix round 1 item 4: `policy.provider.breaker_open_s` must actually
+    reach the breaker, not just sit in the policy unread."""
+    preset = provider.PRESETS["openrouter"]
+
+    def _rate_limited(*args: object) -> tuple[int, bytes, float, float]:
+        return 429, b"{}", 1.0, 1.0
+
+    t0 = time.time()
+    for _ in range(3):
+        provider.evaluate(
+            {}, _QUESTIONS, preset, "key", 5.0, transport=_rate_limited, breaker_open_s=1.0
+        )
+
+    breaker = provider.Breaker()
+    assert breaker.is_open(t0 + 0.5) is True
+    assert breaker.is_open(t0 + 1.5) is False  # not the 600s default
+
+
 # --- Security: the key never leaks through an exception ---------------------
 
 
@@ -337,6 +358,15 @@ def test_breaker_closes_after_expiry(tmp_path: Path) -> None:
     assert breaker.is_open(now + 601) is False
 
 
+def test_breaker_open_s_constructor_param_overrides_default(tmp_path: Path) -> None:
+    breaker = provider.Breaker(tmp_path / "breaker.json", open_s=1.0)
+    now = 1_700_000_000.0
+    for _ in range(3):
+        breaker.record(429, now)
+    assert breaker.is_open(now + 0.5) is True
+    assert breaker.is_open(now + 1.5) is False
+
+
 def test_breaker_a_200_resets_the_consecutive_count(tmp_path: Path) -> None:
     breaker = provider.Breaker(tmp_path / "breaker.json")
     now = 1_700_000_000.0
@@ -352,6 +382,33 @@ def test_breaker_state_file_is_mode_0600(tmp_path: Path) -> None:
     path = tmp_path / "breaker.json"
     provider.Breaker(path).record(429, 1_700_000_000.0)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_breaker_write_is_atomic_and_leaves_no_tmp_file_behind(tmp_path: Path) -> None:
+    """Fix round 1 item 9: `_write` goes through `breaker.json.tmp` plus
+    `os.replace`, never leaving the temp file behind on success."""
+    path = tmp_path / "breaker.json"
+    provider.Breaker(path).record(429, 1_700_000_000.0)
+
+    assert path.exists()
+    assert not (tmp_path / "breaker.json.tmp").exists()
+    assert json.loads(path.read_text())["consecutive_429"] == 1
+
+
+def test_breaker_refuses_to_write_through_a_symlink_and_cleans_up_the_tmp_file(
+    tmp_path: Path,
+) -> None:
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+    link = tmp_path / "breaker.json"
+    os.symlink(victim, link)
+    breaker = provider.Breaker(link)
+
+    breaker.record(429, 1_700_000_000.0)  # must not raise
+
+    assert victim.read_text() == "keep me"
+    assert not (tmp_path / "breaker.json.tmp").exists()
+    assert breaker.is_open(1_700_000_001.0) is False
 
 
 def test_breaker_never_raises_on_a_corrupt_state_file(tmp_path: Path) -> None:

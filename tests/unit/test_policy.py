@@ -36,6 +36,81 @@ def test_load_policy_falls_back_to_packaged_default(isolated_verdict_home: Path)
     assert policy.state.excerpt_tail == 600
 
 
+def test_load_policy_packaged_defaults_pin_task_4_thresholds(
+    isolated_verdict_home: Path,
+) -> None:
+    """Fix round 1 item 5: pin the exact values task-4-brief.md specifies."""
+    policy = policy_mod.load_policy()
+
+    assert policy.thresholds.t_done == 0.7
+    assert policy.thresholds.t_ack == 0.3
+    assert policy.thresholds.t_ack_hi == 0.7
+    assert policy.thresholds.t_check == 0.7
+    assert policy.thresholds.t_soft == 0.8
+    assert policy.thresholds.t_claim == 0.25
+
+
+def test_load_policy_packaged_defaults_pin_task_4_stop_section(
+    isolated_verdict_home: Path,
+) -> None:
+    policy = policy_mod.load_policy()
+
+    assert policy.stop.max_blocks_per_prompt == 1
+    assert policy.stop.ceiling == 2
+    assert policy.stop.always_verify is False
+    assert policy.stop.subagent_block is False
+
+
+def test_load_policy_packaged_defaults_pin_task_4_provider_section(
+    isolated_verdict_home: Path,
+) -> None:
+    policy = policy_mod.load_policy()
+
+    assert policy.provider.default == "openrouter"
+    assert policy.provider.deadline_s == 1.8
+    assert policy.provider.budget_s == 2.5
+    assert policy.provider.retry_min_remaining_s == 1.2
+    assert policy.provider.breaker_open_s == 600
+
+
+def test_load_policy_user_override_of_stop_and_provider_merges(
+    isolated_verdict_home: Path,
+) -> None:
+    """Fix round 1 item 5: a user override of `stop`/`provider` merges
+    through `_merge_top_level` the same way every other section does."""
+    isolated_verdict_home.mkdir(parents=True, exist_ok=True)
+    (isolated_verdict_home / "policy.json").write_text(
+        json.dumps(
+            {
+                "stop": {
+                    "max_blocks_per_prompt": 3,
+                    "ceiling": 3,
+                    "always_verify": True,
+                    "subagent_block": True,
+                },
+                "provider": {
+                    "default": "typesafe",
+                    "deadline_s": 1.0,
+                    "budget_s": 2.0,
+                    "retry_min_remaining_s": 0.5,
+                    "breaker_open_s": 60,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    policy = policy_mod.load_policy()
+
+    assert policy.stop.max_blocks_per_prompt == 3
+    assert policy.stop.always_verify is True
+    assert policy.provider.default == "typesafe"
+    assert policy.provider.breaker_open_s == 60
+    # untouched sections keep the packaged default
+    assert policy.thresholds.t_done == 0.7
+    assert policy.mode == "shadow"
+
+
 def test_load_policy_user_override_may_omit_state_section(isolated_verdict_home: Path) -> None:
     """task-2-brief.md: a user override that never touches `state` keeps the
     packaged default's values (the top-level merge in `_merge_top_level`

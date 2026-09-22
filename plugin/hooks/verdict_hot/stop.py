@@ -1,29 +1,25 @@
-"""Stop and SubagentStop orchestration (PLAN.md 5.3, 5.4; task-4-brief.md).
+"""Stop and SubagentStop orchestration (PLAN.md 5.3, 5.4; task-4-brief.md;
+fix round 1).
 
 `handle(payload, policy, now, api_key, transport=None)` never raises: every
-exception anywhere in the pipeline is converted into an `action` row with
-`action="gate_unavailable"` and an empty stdout (global-constraints.md's
-fail-open model-path rule). `now` is the MONOTONIC start time captured at
-hook entry (`verdict_hook.main`'s own `time.monotonic()`), not a wall-clock
-timestamp -- every budget check measures elapsed time against it, so the
-2.5s Stop budget is spent from the moment Claude Code invoked the hook, not
-from the moment this function was entered.
+exception is converted into an `action` row with `action="gate_unavailable"`
+and empty stdout. `now` is the MONOTONIC start captured at hook entry
+(`verdict_hook.main`'s `time.monotonic()`), not wall-clock -- the 2.5s Stop
+budget is spent from hook entry, not from `stop.handle` entry.
 
-Order: stand-down checks (plan mode, background tasks, guard budget spent)
--> verification span -> the G-STOP gate (skip the provider when nothing in
-the span or the extracted claims could ever trigger a rule, unless
-`policy.stop.always_verify`) -> claims/state/questions -> provider
-selection (`local-only` stands down; a missing key is `gate_unavailable`)
--> the bounded, optionally-retried provider call (`_stop_provider.py`) ->
-`verdict` rows -> `decide` (`verdict_policy.py`) -> the loop guard
-(`guard.py`) -> one `action` row (`_stop_rows.py`) -> the stdout contract.
+Order: stand-down checks (plan mode, background tasks, guard budget spent,
+`_stand_down`) -> verification span -> the G-STOP gate (skip the provider
+when nothing could ever trigger a rule, unless `policy.stop.always_verify`)
+-> claims/state/questions/provider selection (`_gate_and_prepare`) -> the
+bounded, retried provider call, `verdict` rows, `decide`, the loop guard,
+and one `action` row (`_call_and_decide`/`_finalize_decision`, using
+`_stop_provider.py`/`verdict_policy.py`/`guard.py`/`_stop_rows.py`).
 
 Output contract (D-016, A8, A16): block is exactly
 `{"decision":"block","reason":...}`; flag is exactly
 `{"systemMessage":"Verdict: ..."}`; pass is nothing. Shadow mode, and a
 SubagentStop when `policy.stop.subagent_block` is false, always resolve to
-`action="pass"` with `would_have` set to what enforce mode would have done,
-and never print anything.
+`action="pass"` with `would_have` set to what enforce mode would have done.
 """
 
 from __future__ import annotations
@@ -38,6 +34,7 @@ from . import _stop_rows as rows_mod
 from . import claims as claims_mod
 from . import guard as guard_mod
 from . import ledger, verdict_policy
+from . import span as span_mod
 from .cassettes import MissingCassette
 from .policy import Policy
 from .provider import PRESETS, Preset, ProviderResult
@@ -104,14 +101,7 @@ def _has_evidence(span: Span, claim_list: tuple[str, ...]) -> bool:
 
 
 def _resolve_action(
-    decision: Decision,
-    mode: str,
-    is_subagent: bool,
-    policy: Policy,
-    rows_so_far: list[dict[str, object]],
-    session_id: str,
-    prompt_id: str | None,
-    agent_id: str | None,
+    decision: Decision, ctx: _Ctx, policy: Policy, rows_so_far: list[dict[str, object]]
 ) -> _Resolved:
     reason_hash = (
         rows_mod.reason_hash(decision.rule_id, decision.offending_seqs)
@@ -119,13 +109,13 @@ def _resolve_action(
         else None
     )
 
-    if (is_subagent and not policy.stop.subagent_block) or mode != "enforce":
+    if (ctx.is_subagent and not policy.stop.subagent_block) or ctx.mode != "enforce":
         return _Resolved("pass", decision.action, None, reason_hash, None)
 
     if decision.action == "block":
         assert reason_hash is not None
         guard_result = guard_mod.check(
-            rows_so_far, session_id, prompt_id, agent_id, reason_hash, policy
+            rows_so_far, ctx.session_id, ctx.prompt_id, ctx.agent_id, reason_hash, policy
         )
         if guard_result.allowed:
             return _Resolved(
@@ -208,15 +198,20 @@ def _stand_down(
     args = (ctx.session_id, ctx.prompt_id, ctx.agent_id, ctx.mode, ctx.start)
 
     if _opt_str(payload, "permission_mode") == "plan":
-        return _finish(*args, action="pass", gate_reason="skipped_plan_mode"), ctx, []
+        pass_row = _finish(*args, action="pass", gate_reason=span_mod.GATE_REASON_SKIPPED_PLAN_MODE)
+        return pass_row, ctx, []
     if _list_len(payload, "background_tasks") > 0:
-        return _finish(*args, action="pass", gate_reason="skipped_background"), ctx, []
+        pass_row = _finish(
+            *args, action="pass", gate_reason=span_mod.GATE_REASON_SKIPPED_BACKGROUND
+        )
+        return pass_row, ctx, []
 
     rows_so_far = ledger.read_session(ctx.session_id)
     if _bool(payload, "stop_hook_active"):
         issued = guard_mod.blocks_issued(rows_so_far, ctx.session_id, ctx.prompt_id, ctx.agent_id)
-        if issued >= policy.stop.max_blocks_per_prompt:
-            return _finish(*args, action="pass", gate_reason="skipped_guard"), ctx, rows_so_far
+        if issued >= guard_mod.limit(policy):
+            pass_row = _finish(*args, action="pass", gate_reason=span_mod.GATE_REASON_SKIPPED_GUARD)
+            return pass_row, ctx, rows_so_far
     return None, ctx, rows_so_far
 
 
@@ -236,12 +231,16 @@ def _gate_and_prepare(
 
     provider_name = sp.resolve_provider_name(policy)
     if provider_name == "local-only":
-        return _finish(*args, action="pass", gate_reason="local_only", open_failures=open_failures)
+        local_only_gate = span_mod.GATE_REASON_LOCAL_ONLY
+        return _finish(
+            *args, action="pass", gate_reason=local_only_gate, open_failures=open_failures
+        )
     preset = PRESETS.get(provider_name, PRESETS["openrouter"])
     api_key = sp.resolve_api_key(preset, api_key_arg)
     if not api_key:
+        no_key_gate = span_mod.GATE_REASON_NO_KEY
         return _finish(
-            *args, action="gate_unavailable", gate_reason="no_key", open_failures=open_failures
+            *args, action="gate_unavailable", gate_reason=no_key_gate, open_failures=open_failures
         )
 
     state, _overflow = build_state(span, ctx.last_message, claim_list, policy)
@@ -304,17 +303,11 @@ def _finalize_decision(
     result: ProviderResult,
     verdict_rows: list[dict[str, object]],
 ) -> StopOutcome:
-    decision = verdict_policy.decide(result.answers, ready.span, policy)
-    resolved = _resolve_action(
-        decision,
-        ctx.mode,
-        ctx.is_subagent,
-        policy,
-        rows_so_far,
-        ctx.session_id,
-        ctx.prompt_id,
-        ctx.agent_id,
-    )
+    # Fix round 1 item 12: exact ids `state.build_state` numbered (c1, c2,
+    # ...); `decide` only reads `claim_<id>` answers actually asked about.
+    claim_ids = tuple(f"c{i}" for i in range(1, len(ready.claim_list) + 1))
+    decision = verdict_policy.decide(result.answers, ready.span, policy, claim_ids)
+    resolved = _resolve_action(decision, ctx, policy, rows_so_far)
     hook_ms = (time.monotonic() - ctx.start) * 1000.0
     action_row = rows_mod.action_row(
         ctx.session_id,
@@ -353,10 +346,11 @@ def _handle(
     try:
         return _call_and_decide(ctx, ready, rows_so_far, policy, transport)
     except MissingCassette:
+        cassette_gate = span_mod.GATE_REASON_CASSETTE_MISSING
         return _finish(
             *args,
             action="gate_unavailable",
-            gate_reason="cassette_missing",
+            gate_reason=cassette_gate,
             open_failures=ready.open_failures,
         )
 
