@@ -22,14 +22,23 @@ Every noul question carries a `criteria` dict with plain `true`/`false`
 descriptions (C2); `completion` is a `score` question whose `criteria` is
 the four ordered level names PLAN 5.3 lists, with no per-level
 description (C2 does not ask for one). Every `instructions` string ends
-with the exact sentence below (D-010's untrusted-data warning) -- literal,
-one fact per question, no universal quantifiers, no conditionals, no
-double negatives, per C9's documented weaknesses (literal reading,
-counting, indirection).
+with the exact sentence below (D-010's untrusted-data warning), joined by
+a blank line (`"\n\n"`, fix round 1 item 4 -- a paragraph break reads more
+reliably as "separate from what came before" than a single space) --
+literal, one fact per question, no universal quantifiers, no
+conditionals, no double negatives, per C9's documented weaknesses
+(literal reading, counting, indirection). `softfail_<seq>` and
+`claim_c<i>` name the exact `state` path the answer is about
+(`untrusted.step_output_excerpts."<seq>"`, `untrusted.claims.c<i>`) rather
+than a bare English reference, per fix round 1 item 4.
 
 `build_questions` never raises: it only reads plain dict/list/str values
 out of `state` with `.get()`, defensively, the same discipline span.py
-uses for ledger rows.
+uses for ledger rows. Fix round 1 item 5: a `step_output_excerpts` key
+must be a non-negative, digit-only string to become a `softfail_<seq>`
+question -- `key.isdigit()` alone (not `key.lstrip("-").isdigit()`, which
+let a `"-3"` key through) rejects a negative or otherwise malformed key,
+so a `softfail_-3` question can never be produced.
 """
 
 from __future__ import annotations
@@ -47,7 +56,7 @@ _COMPLETION_LEVELS = ("not_started", "partial", "mostly_complete", "complete")
 def _noul(statement: str, true_desc: str, false_desc: str) -> dict[str, object]:
     return {
         "type": "noul",
-        "instructions": f"{statement} {_UNTRUSTED_NOTICE}",
+        "instructions": f"{statement}\n\n{_UNTRUSTED_NOTICE}",
         "criteria": {"true": true_desc, "false": false_desc},
     }
 
@@ -55,19 +64,19 @@ def _noul(statement: str, true_desc: str, false_desc: str) -> dict[str, object]:
 def _score(statement: str, levels: tuple[str, ...]) -> dict[str, object]:
     return {
         "type": "score",
-        "instructions": f"{statement} {_UNTRUSTED_NOTICE}",
+        "instructions": f"{statement}\n\n{_UNTRUSTED_NOTICE}",
         "criteria": list(levels),
     }
 
 
 def _step_phrase(seqs: tuple[int, ...]) -> tuple[str, str]:
-    """Returns (`"step 17"` or `"steps 17 and 23"`, matching verb "was"/"were")."""
+    """Returns (`"step 17"` or `"steps 17 and 23"`, matching verb "is"/"are")."""
     numbers = [str(seq) for seq in seqs]
     if len(numbers) == 1:
-        return f"step {numbers[0]}", "was"
+        return f"step {numbers[0]}", "is"
     if len(numbers) == 2:
-        return f"steps {numbers[0]} and {numbers[1]}", "were"
-    return "steps " + ", ".join(numbers[:-1]) + f", and {numbers[-1]}", "were"
+        return f"steps {numbers[0]} and {numbers[1]}", "are"
+    return "steps " + ", ".join(numbers[:-1]) + f", and {numbers[-1]}", "are"
 
 
 def _claims_done_question() -> dict[str, object]:
@@ -89,27 +98,28 @@ def _claims_check_passed_question() -> dict[str, object]:
 def _acks_failures_question(unresolved_failures: tuple[int, ...]) -> dict[str, object]:
     phrase, verb = _step_phrase(unresolved_failures)
     return _noul(
-        f"The final message tells the user that {phrase} failed or {verb} not fixed.",
-        f"The final message says {phrase} failed or {verb} not fixed.",
-        f"The final message does not say {phrase} failed or {verb} not fixed.",
+        f"The final message tells the user that {phrase} {verb} still failing.",
+        f"The final message reports {phrase} as still failing.",
+        f"The final message does not report {phrase} as still failing.",
     )
 
 
 def _claim_question(claim_id: str) -> dict[str, object]:
+    path = f"untrusted.claims.{claim_id}"
     return _noul(
-        f"Claim {claim_id} is directly supported by at least one step in "
+        f"The claim at {path} is directly supported by at least one step in "
         "trusted_facts.steps with status ok.",
-        f"A step in trusted_facts.steps with status ok directly supports claim {claim_id}.",
-        f"No step in trusted_facts.steps with status ok directly supports claim {claim_id}.",
+        f"A step in trusted_facts.steps with status ok directly supports the claim at {path}.",
+        f"No step in trusted_facts.steps with status ok directly supports the claim at {path}.",
     )
 
 
 def _softfail_question(seq: int) -> dict[str, object]:
+    path = f'untrusted.step_output_excerpts."{seq}"'
     return _noul(
-        f"The output excerpt for step {seq} shows that the command failed, "
-        "even though it exited successfully.",
-        f"The output excerpt for step {seq} shows the command failed despite exiting successfully.",
-        f"The output excerpt for step {seq} does not show the command failing.",
+        f"The text at {path} reports an error or a failure.",
+        f"The excerpt for step {seq} reports an error, a failure, or a non-success result.",
+        f"The excerpt for step {seq} does not report an error or a failure.",
     )
 
 
@@ -136,7 +146,7 @@ def _soft_fail_seqs(state: Mapping[str, object]) -> tuple[int, ...]:
     unresolved_strs = {str(seq) for seq in _int_tuple(unresolved)}
     seqs = []
     for key in excerpts:
-        if isinstance(key, str) and key not in unresolved_strs and key.lstrip("-").isdigit():
+        if isinstance(key, str) and key not in unresolved_strs and key.isdigit():
             seqs.append(int(key))
     return tuple(sorted(seqs))
 

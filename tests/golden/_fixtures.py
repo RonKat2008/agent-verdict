@@ -1,14 +1,26 @@
-"""The four fixture spans shared by test_state.py, test_questions.py, and
-scripts/regen_golden.py (task-2-brief.md).
+"""The five fixture spans shared by test_state.py, test_questions.py, and
+scripts/regen_golden.py (task-2-brief.md, fix round 1 item 3).
 
 Not a test module itself (no `test_` prefix, so pytest never collects it):
-a single source of truth for the four `(name, span, final_message)` triples
+a single source of truth for the five `(name, span, final_message)` triples
 so the golden JSON under `tests/golden/questions/` and
 `tests/golden/states/` is always generated and checked by the exact same
 fixture data.
 
 Claims are produced by the real `claims.extract_claims`, not hand-typed,
 so a golden file reflects what the real pipeline would send.
+
+`over_budget`'s final message is bounded to 8,000 characters (fix round 1
+item 3: `store.final_message_max_chars` in `plugin/policies/default.json`
+-- the real limit the recorder applies before this module ever sees a
+message), so the compression it exercises (stage 1: drop plain-ok steps;
+stage 2: shrink excerpts) is one production can actually reach, rather
+than relying on an unrealistically huge message to dominate the budget.
+`overflow` is a separate fixture: enough protected (error/soft-fail) steps
+with excerpts survive stages 1-3 to blow past the hard cap on their own,
+so stage 4 (drop soft-fail candidates, oldest first) has to run and
+`overflow` comes back `True` from real compression, not from a message
+no real `Stop` hook would ever pass in.
 """
 
 from __future__ import annotations
@@ -186,12 +198,67 @@ def _over_budget() -> tuple[Span, str]:
         "shard in the cluster, and the coordinator is reporting steady "
         "throughput with no unexpected slowdowns so far this run. "
     )
-    final_message = (
+    prefix = (
         "The data migration completed for most shards, and the lint and test "
         "checks pass. Three shard migrations failed with a duplicate column "
         "error, and two batch callbacks came back with a service-unavailable "
         "response. "
-    ) + paragraph * 200
+    )
+    final_message = (prefix + paragraph * 200)[:8000]
+    return span, final_message
+
+
+def _overflow() -> tuple[Span, str]:
+    """Enough error and soft-fail steps, each with a sizeable raw excerpt,
+    that even after stage 2 shrinks every excerpt to `excerpt_head` +
+    `excerpt_tail`, the state is still over `max_tokens` -- stage 4 (drop
+    the oldest soft-fail candidates) has to run for real, so `overflow`
+    comes back `True` from actual compression."""
+    steps: list[Step] = []
+    unresolved: list[int] = []
+    soft_fail: list[int] = []
+    seq = 1
+    for _ in range(60):
+        steps.append(
+            _step(
+                seq,
+                "Bash",
+                f"psql -f migrations/{seq:04d}_backfill.sql",
+                status="error",
+                exit_code=1,
+                out_excerpt=("ERROR: deadlock detected\n" * 100) + f"detail {seq}",
+            )
+        )
+        unresolved.append(seq)
+        seq += 1
+    for _ in range(60):
+        steps.append(
+            _step(
+                seq,
+                "Bash",
+                f"curl -s https://api.example.com/shard/{seq}/status",
+                status="ok",
+                exit_code=0,
+                soft_fail_candidate=True,
+                out_excerpt=("HTTP/1.1 503 Service Unavailable\n" * 90) + f"detail {seq}",
+            )
+        )
+        soft_fail.append(seq)
+        seq += 1
+    span = _span(
+        prompts=("Backfill every shard and report which ones failed.",),
+        steps=tuple(steps),
+        unresolved_failures=tuple(unresolved),
+        soft_fail_seqs=tuple(soft_fail),
+        checks_passed_after_last_change=False,
+    )
+    prefix = (
+        "The backfill completed for most shards, and the smoke test checks "
+        "pass. Sixty shard backfills failed outright, and sixty status "
+        "checks came back with a service-unavailable response. "
+    )
+    padding = "Every shard reports its own backfill lag and retry count. "
+    final_message = (prefix + padding * 150)[:8000]
     return span, final_message
 
 
@@ -200,6 +267,7 @@ FIXTURES: tuple[tuple[str, Span, str], ...] = (
     ("unresolved_failure", *_unresolved_failure()),
     ("soft_fail", *_soft_fail()),
     ("over_budget", *_over_budget()),
+    ("overflow", *_overflow()),
 )
 
 

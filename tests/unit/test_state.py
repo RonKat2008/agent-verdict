@@ -1,4 +1,5 @@
-"""Tests for verdict_hot.state (task-2-brief.md, PLAN.md 5.3, D-010, C4).
+"""Tests for verdict_hot.state (task-2-brief.md, PLAN.md 5.3, D-010, C4,
+fix round 1).
 
 Golden equality (byte-for-byte against tests/golden/states/*.json) lives
 here too, generated from the same tests/golden/_fixtures.py the questions
@@ -10,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -165,7 +167,9 @@ def test_stage1_drops_oldest_plain_ok_steps_first(default_policy: Policy) -> Non
 
     seqs = [s["seq"] for s in result["trusted_facts"]["steps"]]
     assert seqs == sorted(seqs)  # whatever remains keeps its relative order
-    assert overflow is False  # stage 1 alone brought it under max_tokens
+    # fix round 1 item 3: overflow is true whenever anything was dropped or
+    # shortened, not only when the hard cap forced it -- stage 1 dropped steps.
+    assert overflow is True
 
 
 def test_error_check_softfail_survive_stage1_and_stage2(default_policy: Policy) -> None:
@@ -228,6 +232,102 @@ def test_build_state_never_exceeds_max_tokens_even_when_nothing_is_droppable(
     assert isinstance(result, dict)  # never raised
 
 
+def test_no_compression_leaves_overflow_false(default_policy: Policy) -> None:
+    """fix round 1 item 3: a span that never needs any stage leaves
+    `overflow` false -- it is not true unconditionally."""
+    span = _span(steps=(_step(1), _step(2, is_check=True, exit_code=0)))
+
+    result, overflow = _build(span, "short message", (), default_policy)
+
+    assert overflow is False
+    assert len(result["trusted_facts"]["steps"]) == 2
+
+
+def test_stage2_shortening_alone_sets_overflow(default_policy: Policy) -> None:
+    """fix round 1 item 3: overflow is true as soon as anything is
+    shortened, even when no step is ever dropped (target so small stage 1
+    has nothing plain-ok to drop, but stage 2 still shrinks the excerpt)."""
+    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=22000)
+    big_excerpt = "line of output\n" * 200
+    span = _span(
+        steps=(_step(1, status="error", out_excerpt=big_excerpt),),
+        unresolved_failures=(1,),
+    )
+
+    result, overflow = _build(span, "m", (), tiny)
+
+    assert overflow is True
+    assert len(result["untrusted"]["step_output_excerpts"]["1"]) < len(big_excerpt)
+
+
+# --- Item 2: the hard cap is guaranteed inside build_state ------------------
+
+
+def test_200kb_final_message_stays_under_hard_cap_and_never_raises(
+    default_policy: Policy,
+) -> None:
+    span = _span(steps=(_step(1, status="error", out_excerpt="boom"),), unresolved_failures=(1,))
+    final_message = "x" * 200_000
+
+    result, overflow = _build(span, final_message, ("a claim",), default_policy)
+
+    tokens = len(json.dumps(result, ensure_ascii=False)) // 4
+    assert tokens <= default_policy.state.max_tokens
+    assert overflow is True
+
+
+def test_final_clamp_caps_each_claim_at_240_chars(default_policy: Policy) -> None:
+    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=1)
+    span = _span(steps=())
+    long_claim = "y" * 5000
+
+    result, overflow = _build(span, "z" * 5000, (long_claim,), tiny)
+
+    assert overflow is True
+    assert len(result["untrusted"]["claims"]["c1"]) <= 240
+
+
+# --- Item 1: linear (not quadratic) compression -----------------------------
+
+
+def _perf_span(total_steps: int, flagged: int, excerpt_size: int) -> Span:
+    steps = []
+    unresolved = []
+    for seq in range(1, total_steps + 1):
+        if seq <= flagged:
+            steps.append(
+                _step(seq, status="error", out_excerpt="x" * excerpt_size, command=f"cmd {seq}")
+            )
+            unresolved.append(seq)
+        else:
+            steps.append(_step(seq, command=f"echo step {seq} ran fine and produced no output"))
+    return _span(steps=tuple(steps), unresolved_failures=tuple(unresolved))
+
+
+@pytest.mark.slow
+def test_build_state_is_fast_for_600_steps_200_flagged_8kb_excerpts(
+    default_policy: Policy,
+) -> None:
+    span = _perf_span(total_steps=600, flagged=200, excerpt_size=8 * 1024)
+
+    start = time.perf_counter()
+    state.build_state(span, "done", (), default_policy)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.06, f"took {elapsed * 1000:.1f}ms, budget is 60ms"
+
+
+@pytest.mark.slow
+def test_build_state_is_fast_for_500_steps_20kb_excerpts(default_policy: Policy) -> None:
+    span = _perf_span(total_steps=500, flagged=200, excerpt_size=20 * 1024)
+
+    start = time.perf_counter()
+    state.build_state(span, "done", (), default_policy)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.10, f"took {elapsed * 1000:.1f}ms, budget is 100ms"
+
+
 # --- Golden equality -------------------------------------------------------
 
 
@@ -244,12 +344,18 @@ def test_state_matches_golden_file(name: str, span: Span, final_message: str) ->
 
 # --- Hypothesis: compression invariants -------------------------------------
 
-# Bounded so the "keep newest 40" last resort (stage 5) never has to touch a
-# protected (error/check/soft-fail) row -- capping protected-row count at 40
-# means the documented invariant "every error, soft-fail, and check step
-# survives" is provable for every generated example, matching how span.py's
-# own Hypothesis test scopes "arbitrary" to a bounded generative space
-# rather than a literal infinite one.
+# The step-count bound below is about which invariant is being tested, not
+# a limitation of build_state's hard cap: capping protected-row count at 40
+# means stage 5's "keep newest 40" last resort never has to touch a
+# protected (error/check/soft-fail) row, so "every error, soft-fail, and
+# check step survives" is provable for every generated example (matching
+# how span.py's own Hypothesis test scopes "arbitrary" to a bounded
+# generative space rather than a literal infinite one). The hard cap on
+# total tokens, by contrast, is now (fix round 1 item 2) guaranteed
+# unconditionally by the final clamp stage, so `final_message` here is
+# generated up to 50,000 characters -- large enough to force that stage on
+# some examples -- rather than a size chosen just to make the invariant
+# provable.
 _KIND = st.sampled_from(("plain_ok", "error", "check", "soft_fail"))
 _EXCERPT_TEXT = st.text(max_size=2000)
 
@@ -277,7 +383,7 @@ def _spans(draw: st.DrawFn) -> tuple[Span, str, tuple[str, ...]]:
         else:
             steps.append(_step(seq, command=draw(st.text(max_size=200))))
 
-    final_message = draw(st.text(max_size=3000))
+    final_message = draw(st.text(max_size=50_000))
     user_task = draw(st.text(max_size=3000))
     claims_tuple = tuple(draw(st.lists(st.text(max_size=240), max_size=6)))
     span = _span(
@@ -310,5 +416,6 @@ def test_build_state_respects_hard_cap_and_protects_key_rows(
         s.seq for s in span.steps if s.status == "error" or s.is_check or s.soft_fail_candidate
     }
     assert protected_seqs <= remaining_seqs
-    if overflow:
-        assert True  # overflow only ever set when stage 4/5 ran
+    for claim_text in result["untrusted"]["claims"].values():
+        assert len(claim_text) <= 240
+    assert isinstance(overflow, bool)
