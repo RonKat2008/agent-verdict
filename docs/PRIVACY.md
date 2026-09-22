@@ -6,6 +6,49 @@ Facts here come from `docs/PLAN.md` section 10, `docs/DECISIONS.md` (D-017, D-02
 D-026, D-027), and the redaction measurements in
 [`docs/measurements/redaction-heldout-2026-09-21.md`](measurements/redaction-heldout-2026-09-21.md).
 
+## What changed in v0.2 (2026-09-22)
+
+Starting with v0.2, the Stop and SubagentStop hooks send a redacted turn summary to your
+configured provider (OpenRouter by default) whenever the evidence gate (G-STOP) decides a
+stop needs judging. Stated plainly, one request per judged stop carries:
+
+- Excerpts of your prompt(s) for the turn (`trusted_facts.user_task`, already redacted
+  and truncated the same way the ledger's own `prompt_excerpt` is).
+- A structural list of the steps taken: tool name, a sanitized command or path, status
+  (`ok`/`error`), and exit code (`trusted_facts.steps`) — never raw tool output at this
+  level, only these fields.
+- Short, redacted output excerpts, but only around unresolved failures and soft-fail
+  candidates (`untrusted.step_output_excerpts`), never a full tool output.
+- The assistant's final message for the turn, after the same normalize-and-redact
+  pipeline every ledger row goes through (`untrusted.final_message`).
+- The claims the code extracted from that final message (`untrusted.claims`).
+
+What this request never carries: file contents, anything from a never-send path or
+command (those rows contribute only their structural fields, per the never-send section
+below), or raw tool output beyond the short excerpts above. The whole request passes
+through the same `redact()` the ledger uses before it is sent (one function, three call
+sites: the ledger write, this provider request, and `verdict export`).
+
+The provider's response is a small set of numeric judgments (`noul` values `0` to `1`,
+or a fixed-choice string) against a fixed question set — never free text back from the
+provider that gets stored or shown to you as-is. Those numbers, plus which model
+answered, are written to your local `verdict` ledger rows; nothing about the response
+is transmitted anywhere else.
+
+**To keep this local:** set the plugin's `provider` option (or `~/.verdict/policy.json`'s
+`provider` field) to `local-only`. In that mode, `Stop`/`SubagentStop` still run the
+evidence gate and write ledger rows, but the request is never built and no socket opens;
+the row records `gate_reason: "local_only"`. Setting `mode` to `off` goes further and
+disables recording entirely, so nothing new is written at all. Both were already true in
+v0.1's collector mode, and remain the only ways to guarantee zero network calls from the
+Stop/SubagentStop path in v0.2.
+
+The API key is read from the plugin's `api_key` option, else the `OPENROUTER_API_KEY` or
+`TYPESAFE_API_KEY` environment variable, matching the selected provider. It is never
+read from a file, never passed on argv, never logged, and never written to the ledger:
+`redact()` strips it by value from every row, the provider request body, and every
+export, on the same "one function, three call sites" guarantee above.
+
 ## Egress, stated honestly
 
 From `docs/PLAN.md` section 10, quoted plainly:
@@ -15,11 +58,13 @@ From `docs/PLAN.md` section 10, quoted plainly:
 > message) to your configured provider. Collector mode and local-only mode send
 > nothing.
 
-In this version (v0.1, collector mode), no verification step exists yet, so this hook
-never fires and **the recording path makes no network call at all**: nothing under
-`plugin/hooks/` opens a socket.
+In v0.1 (collector mode), no verification step existed yet, so this hook never fired and
+the recording path made no network call at all. **As of v0.2** (see "What changed in
+v0.2" above), the Stop and SubagentStop hooks do call your configured provider whenever
+the evidence gate decides a stop needs judging; `provider: local-only` or `mode: off`
+are the only ways to opt back out of every network call from this path.
 
-One command in this package does reach the network, and only when you run it yourself:
+One command in this package also reaches the network, and only when you run it yourself:
 `verdict doctor` opens a TLS connection to `openrouter.ai` and `api.typesafe.ai` to report
 whether each provider is reachable. That probe sends no ledger data and no API key, but it
 does expose your machine's IP address to those hosts. It is informational only, and
@@ -35,24 +80,29 @@ carries `schema_v`, `ts`, `event`, `session_id`, `prompt_id`, `agent_id`,
 |---|---|
 | `session_start` | `source`, `model` (optional), `cwd_hash`, `cc_effort` |
 | `prompt` | `prompt_excerpt` (redacted, at most 6,000 characters), `redaction_hits` |
-| `pre` (from M2) | `tool_use_id`, `tool_name`, `rule_id`, `decision` (`deny`, `ask`, or null), `never_send` (bool) |
+| `pre` | `tool_use_id`, `tool_name`, `rule_id`, `decision` (`deny`, `ask`, or null), `never_send` (bool) |
 | `post` | `tool_use_id`, `tool_name`, `input_excerpt` (redacted, at most 300 chars), `out_head` and `out_tail` (redacted, at most 4,096 chars each), `raw_bytes`, `duration_ms`, `is_check`, `soft_fail_candidate`, `mcp_server`, `redaction_hits`, `sanitized_chars` |
 | `post_fail` | `tool_use_id`, `tool_name`, `input_excerpt`, `status: "error"`, `exit_code` (int or null), `is_interrupt`, `error_excerpt` (first 300 plus last 2,000 chars, redacted), `duration_ms` |
-| `stop` (and `subagent_stop`, from M2) | `stop_hook_active`, `final_message_excerpt` (redacted, at most 8,000 characters), `claims[]`, `background_tasks_n` |
+| `stop` (and `subagent_stop`) | `stop_hook_active`, `final_message_excerpt` (redacted, at most 8,000 characters), `claims[]`, `background_tasks_n` |
+| `verdict` | `question_key`, `question_type`, `answer` (only the field its type defines: `noul`, `score`, or `choice` — never a provider's extra metadata), `provider`, `model_returned`, `input_tokens`, `policy_version` |
+| `action` | `action` (`pass`/`flag`/`block`/`gate_unavailable`), `would_have`, `rule_id`, `gate_reason`, `hook_ms`, `open_failures` |
 | `session_end` | `reason` |
 
-M1 writes only `session_start`, `prompt`, `post`, `post_fail`, `stop`, and `session_end`
-rows. `pre` and `subagent_stop` are listed above because the schema already carries them,
-but no v0.1 hook emits either; from M2, a `pre` row with no matching `post` or `post_fail`
-row will mean the call was denied or never ran, and is never counted as a failure.
-`verdict` and `action` rows (verification answers and gate decisions) also arrive in M2.
-Every excerpt cap above is a count of **characters**, not tokens.
+v0.1 wrote only `session_start`, `prompt`, `post`, `post_fail`, `stop`, and
+`session_end` rows. **From v0.2**, `pre` (the PreToolUse rules gate), `subagent_stop`,
+`verdict` (one row per question the provider answered), and `action` (the Stop hook's
+own gate decision, per prompt) are written too. A `pre` row with no matching `post` or
+`post_fail` row means the call was denied or never ran, and is never counted as a
+failure. Every excerpt cap above is a count of **characters**, not tokens.
 
 ## Modes and the kill switch
 
 Three modes, set through the plugin's `mode` option: `shadow` (default; records and
-judges, never blocks or nudges), `enforce` (may block on strong evidence, not available
-until a later version), and `off` (disables recording entirely). `off` is checked in the
+judges, never blocks or nudges — a would-be block is recorded as `would_have: "block"`
+with nothing printed), `enforce` (from v0.2: may block on strong evidence, printing
+`{"decision": "block", "reason": ...}` for Claude Code to read, at most
+`max_blocks_per_prompt` times per prompt), and `off` (disables recording entirely). `off`
+is checked in the
 hook entry point before anything is imported, so it writes nothing at all — not even a
 `hook.log` line. Setting `"mode": "off"` in `~/.verdict/policy.json` has the same effect
 on the ledger, one step later: the hook runs, writes no row, and logs the invocation as

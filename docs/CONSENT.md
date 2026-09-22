@@ -37,32 +37,53 @@ was a check (`is_check`), how long it took (`duration_ms`), and a hash of the wo
 directory (`cwd_hash`) — enough to know that a tool ran. Every piece of content and every
 path on that row is replaced by the literal string `[never-send]`.
 
+## What changed in v0.2 (2026-09-22)
+
+**As of v0.2, verification sends data off this machine.** When the Stop or SubagentStop
+hook decides a completion claim needs judging (the evidence gate, G-STOP), it sends one
+request to your configured provider (OpenRouter by default, or TypeSafe): a redacted
+turn summary carrying excerpts of your prompt, a structural list of the steps taken
+(tool name, a sanitized command, status, exit code — never raw output at this level),
+short redacted output excerpts around failures only, the assistant's final message after
+redaction, and the claims extracted from it. It never carries file contents or anything
+from a never-send path or command. The full field-by-field breakdown is in
+`docs/PRIVACY.md`'s "What changed in v0.2" section.
+
+The provider's reply is a small set of numeric judgments against a fixed question set;
+those numbers (plus the model id that answered) are written to your local ledger as
+`verdict` rows, and nothing else about the reply leaves that exchange.
+
+**To stay local:** set the plugin's `provider` option to `local-only` (the evidence gate
+still runs and writes ledger rows, but no request is ever built and no socket opens), or
+set `mode` to `off` to disable recording entirely. Both fully replicate v0.1's
+zero-network-call guarantee for this path.
+
+The API key comes from the plugin's `api_key` option or the `OPENROUTER_API_KEY` /
+`TYPESAFE_API_KEY` environment variable; it is never read from a file, never logged, and
+never stored in the ledger, a provider request, or an export.
+
 ## What leaves this machine
 
-**In this version, no recorded data leaves your machine.** `agent-verdict` v0.1 is a
-collector: it writes to your local ledger under `~/.verdict`, and the recording path makes
-no network calls at all. This is a deliberate design choice for M1, not a temporary
-limitation of a beta.
+`agent-verdict` v0.1 was a pure collector: it wrote to your local ledger under
+`~/.verdict`, and the recording path made no network calls at all. **As of v0.2** (see
+above), the Stop/SubagentStop path calls your configured provider whenever the evidence
+gate decides a stop needs judging; `provider: local-only` or `mode: off` are the only
+ways to keep every network call from this path at zero, exactly as in v0.1.
 
-One exception, which you trigger yourself and which sends none of your data: `verdict
-doctor` opens a TLS connection to `openrouter.ai` and `api.typesafe.ai` to report whether
-each provider is reachable. No ledger content and no API key is sent, but your machine's
-IP address is exposed to those two hosts. Run `verdict doctor --no-probe` to skip the
-check and make the command network-free.
+One exception, which you trigger yourself and which sends none of your ledger data:
+`verdict doctor` opens a TLS connection to `openrouter.ai` and `api.typesafe.ai` to report
+whether each provider is reachable. No ledger content and no API key is sent, but your
+machine's IP address is exposed to those two hosts. Run `verdict doctor --no-probe` to
+skip the check and make the command network-free.
 
-**From M2 onward, this changes for verification.** When Verdict verifies a stop, it will
-send a redacted, truncated summary of that turn (your prompt, the commands run, short
-output excerpts, and the assistant's final message) to your configured provider
-(TypeSafe or OpenRouter). You will be told about this switch, in the README and at
-enable time, before it takes effect on your installation. Collector mode and local-only
-mode will continue to send nothing.
-
-Raw text never leaves the machine that produced it, in any version. What may eventually
-be shared, under MIT, in this project's public repository, is derived data only: a
-hashed event id, your contributor id, the hook kind, the tool name, a question key, a
-label, an exit code, counts of error rows and claims, whether a check ran, numeric
-answers, the model id that answered, and a hash of the raw row. Never the raw prompt,
-command, output, or final message text.
+Two different things must not be confused: verification egress (above, since v0.2) sends
+a redacted turn summary to your own configured provider, over your own API key, for a
+one-time judgment. Publication is separate and unchanged: what may eventually be shared,
+under MIT, in this project's public repository, is derived data only: a hashed event id,
+your contributor id, the hook kind, the tool name, a question key, a label, an exit code,
+counts of error rows and claims, whether a check ran, numeric answers, the model id that
+answered, and a hash of the raw row. Never the raw prompt, command, output, or final
+message text — publication never includes the verification request's own content either.
 
 ## Where your data lives
 
@@ -78,8 +99,7 @@ irreplaceable.
   before any other work and stops recording immediately.
 - **Stop.** Uninstall the plugin (`/plugin uninstall agent-verdict`). Recording stops;
   your existing data stays under `~/.verdict` until you remove it yourself.
-- **Purge.** Delete `~/.verdict` yourself. A `verdict purge` command is planned for M2
-  and is not shipped in this version.
+- **Purge.** Run `verdict purge` (shipped in v0.2), or delete `~/.verdict` yourself.
 - **Revoke.** If you contributed data to the study and want your rows removed, message
   the maintainer. Your contributor rows are dropped in the project's next release.
 

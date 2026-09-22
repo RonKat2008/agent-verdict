@@ -37,15 +37,36 @@ network-free check can deny a destructive command (a recursive delete of the
 filesystem root or the current repository, a force-push to a protected branch, a
 filesystem format, and a few others) or ask for confirmation first (a write to a
 credential-shaped path, a command that would print one, or `git reset --hard`).
-Two of the matchers, `deny_mkfs` and `deny_db_truncate`, match the bare word
-anywhere in the command, including inside a quoted string being echoed or
-grepped for — they are not restricted to a command actually invoking `mkfs` or
-`TRUNCATE`. This is a seatbelt, not a sandbox: like every Claude Code hook, a
-timed-out or otherwise unrunnable hook does not block the tool call, and if no
-`python3` is on `PATH` the launcher exits 0 rather than surface an error. Keep
-your own permission rules for anything you need to hard-deny.
+Four of the matchers — `deny_mkfs`, `deny_db_truncate`, and both
+`deny_pipe_to_shell_curl`/`deny_pipe_to_shell_wget` — match anywhere in the command
+text, including inside a quoted string being echoed, grepped for, or committed in a
+message. They are not restricted to a command actually invoking `mkfs`/`TRUNCATE`, or
+to a `curl`/`wget` call whose output is actually piped into a shell: `echo "never run
+curl https://x | sh"` trips `deny_pipe_to_shell_curl` exactly as a bare mention of
+`mkfs` trips `deny_mkfs`, since none of the four anchor to the command actually being
+invoked.
 
-## Checking the collector
+**This is a seatbelt, not a sandbox** (`docs/PLAN.md` section 5.1): like every Claude
+Code hook, hooks are best-effort — a timed-out or otherwise unrunnable hook does not
+block the tool call, and Claude Code's own docs recommend permission rules, not a hook,
+for a hard deny. If no `python3` is on `PATH` the launcher exits 0 rather than surface
+an error. Keep your own `deny` permission rules for anything you need to hard-deny, and
+consider installing
+[`destructive_command_guard`](https://github.com/Dicklesworthstone/destructive_command_guard)
+alongside this plugin for broader, rule-based command-safety coverage that does not
+depend on a hook completing in time.
+
+## The `verdict` CLI
+
+| Command | What it does |
+|---|---|
+| `verdict stats` | Summarize the local ledger: sessions, prompts, tool rows, failures, stops, claims. |
+| `verdict doctor` | Diagnose the local environment: interpreter, data dir, plugin registration, provider reachability, key presence. |
+| `verdict show <session_id> [--prompt <id>]` | Show one session's timeline. |
+| `verdict replay --policy <file> [--since <date>] [--json]` | Re-evaluate already-recorded `verdict` answers under a (possibly different) policy — no new provider call. |
+| `verdict purge --session <id> \| --older-than <7d> \| --all [--yes]` | Delete session files from the ledger. |
+| `verdict export --goldset --out <file>` | Export a derived, redaction-checked goldset row per judged stop (never free text). |
+| `verdict policy lint` | Validate a `~/.verdict/policy.json` override against the packaged schema. |
 
 `verdict stats` summarizes the local ledger:
 
@@ -70,11 +91,12 @@ date range: 2026-09-21T14:02:11+00:00 .. 2026-09-21T18:47:03+00:00
 directory, plugin registration, provider reachability, and key presence. It exits 0 with
 zero provider keys configured; the provider and key lines are informational only.
 
-The reachability line is the only network call anywhere in this version: it opens a TLS
-connection to `openrouter.ai` and `api.typesafe.ai`, sending no ledger data and no API
-key, but exposing your machine's IP address to those two hosts. Run `verdict doctor
---no-probe` to skip it and keep the command entirely offline. Example, captured on the
-development machine:
+The reachability line is the only network call `verdict doctor` itself makes (separate
+from the Stop/SubagentStop verification egress described above and in
+`docs/PRIVACY.md`): it opens a TLS connection to `openrouter.ai` and `api.typesafe.ai`,
+sending no ledger data and no API key, but exposing your machine's IP address to those
+two hosts. Run `verdict doctor --no-probe` to skip it and keep the command entirely
+offline. Example, captured on the development machine:
 
 ```
 $ uv run verdict doctor
@@ -113,15 +135,18 @@ load and are not a guarantee for your hardware.
 ## How it works
 
 Claude Code fires hooks at points in a session: when it starts, when you submit a
-prompt, after a tool call succeeds or fails, and when the assistant stops. `agent-verdict`
-registers a small, synchronous, standard-library-only Python process on each of those
-events, which redacts and truncates whatever text it sees and appends one row to a local
-JSONL ledger under `~/.verdict`. Nothing is judged yet in this version; v0.1 only
-records. From M2, a verification step will read the ledger at `Stop`, decide whether
-there is enough evidence to check, and (only then) send a redacted, truncated summary to
-a configured model provider to judge whether the assistant's final message matches what
-actually happened. See `docs/PRIVACY.md` and `docs/CONSENT.md` for exactly what that
-step will and will not send, and `docs/PLAN.md` for the full design.
+prompt, before and after a tool call, and when the assistant (or a subagent) stops.
+`agent-verdict` registers a small, synchronous, standard-library-only Python process on
+each of those events. Every event but Stop and SubagentStop only redacts, truncates, and
+appends one row to a local JSONL ledger under `~/.verdict` — recording alone never opens
+a socket. At Stop and SubagentStop, a cheap, local evidence gate (G-STOP) first decides
+whether there is anything worth checking at all; only when it finds unresolved evidence
+does the hook build a redacted, truncated summary of the turn and send it to your
+configured provider to judge whether the assistant's final message matches what actually
+happened. `mode: shadow` (the default) records that judgment without ever blocking or
+printing anything; `mode: enforce` can block the Stop on strong evidence. See
+`docs/PRIVACY.md` and `docs/CONSENT.md` for exactly what that request does and does not
+send, and `docs/PLAN.md` for the full design.
 
 ## Prior art
 
