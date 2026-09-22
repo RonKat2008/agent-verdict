@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _concurrency_worker import append_rows  # noqa: E402
+from _concurrency_worker import ROW_FILLER_CHARS, append_rows, row_filler  # noqa: E402
 from schema_check import validate_row  # noqa: E402
 from verdict_hot import ledger, paths  # noqa: E402
 
@@ -209,6 +209,12 @@ def test_16_processes_append_500_rows_without_interleaving(
         key = (parsed["pid"], parsed["n"])
         assert key not in seen, f"duplicate/interleaved row: {key}"
         seen.add(key)
+        # Interleaving check: every row is over 5 KiB, so it cannot be
+        # written atomically. A row whose filler is not exactly its own
+        # process's filler means two writers spliced into one line.
+        filler = parsed["filler"]
+        assert len(filler) == ROW_FILLER_CHARS, f"torn row for {key}: filler {len(filler)} chars"
+        assert filler == row_filler(parsed["pid"]), f"interleaved filler in row {key}"
 
     for pid in range(n_procs):
         for n in range(counts[pid]):

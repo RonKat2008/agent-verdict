@@ -192,6 +192,36 @@ def _attribute(spans: set[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
     return sorted((start, end, rule_id) for (start, end), rule_id in best.items())
 
 
+def _preferred_rule(current: str, other: str) -> str:
+    """Attribution for a merged span: keep `current`, unless it is a generic
+    id and `other` names an actual secret family (final review, C1)."""
+    if _is_generic_rule(current) and not _is_generic_rule(other):
+        return other
+    return current
+
+
+def _merge_overlapping(spans: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
+    """Merge overlapping spans, across ALL rules, into their union.
+
+    `spans` must be sorted by (start, end). Emitting markers left to right
+    while skipping any span that started before the cursor left the TAIL of
+    a longer overlapping span in the clear (final review, C1): an
+    `env-configured-secret` value that is a 20-character prefix of a 40-
+    character `ghp_` token used to be replaced by its marker, after which
+    the token's remaining 20 characters were written verbatim. Two spans
+    that merely touch (`start == previous end`) are NOT merged: they are
+    adjacent secrets and keep one marker each.
+    """
+    merged: list[tuple[int, int, str]] = []
+    for start, end, rule_id in spans:
+        if merged and start < merged[-1][1]:
+            prev_start, prev_end, prev_rule = merged[-1]
+            merged[-1] = (prev_start, max(prev_end, end), _preferred_rule(prev_rule, rule_id))
+            continue
+        merged.append((start, end, rule_id))
+    return merged
+
+
 _ENV_RULE_ID = "env-configured-secret"
 _ENV_SECRET_PREFIX = "CLAUDE_PLUGIN_OPTION_"
 _ENV_SECRET_EXACT_NAMES = frozenset({"OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "ANTHROPIC_API_KEY"})
@@ -243,9 +273,7 @@ def _redact_unsafe(text: str) -> tuple[str, tuple[str, ...]]:
     parts: list[str] = []
     rule_ids: list[str] = []
     cursor = 0
-    for start, end, rule_id in _attribute(spans):
-        if start < cursor:
-            continue  # overlaps a span already accepted; keep the earlier one
+    for start, end, rule_id in _merge_overlapping(_attribute(spans)):
         parts.append(text[cursor:start])
         parts.append(_MARKER_TEMPLATE.format(rule_id))
         rule_ids.append(rule_id)

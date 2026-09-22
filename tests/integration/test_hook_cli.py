@@ -199,3 +199,41 @@ def test_relative_interpreter_path_is_ignored(tmp_path: Path) -> None:
     (tmp_path / "interpreter").write_text("bin/python3\n")
     proc = _run(tmp_path, (FIXTURES / "stop.json").read_bytes())
     assert proc.returncode == 0 and len(_rows(tmp_path)) == 1  # fell through to PATH python3
+
+
+# --- Final review C2: the advertised `mode` option is honored --------------
+
+
+@pytest.mark.parametrize("value", ["off", "OFF", "  off  "])
+def test_mode_off_writes_nothing_at_all(tmp_path: Path, value: str) -> None:
+    """`plugin.json` says `off` "disables recording entirely", so not even
+    hook.log is written: the entry point exits before any import."""
+    home = tmp_path / "home"
+    proc = _run(
+        home, (FIXTURES / "stop.json").read_bytes(), extra={"CLAUDE_PLUGIN_OPTION_MODE": value}
+    )
+    assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
+    assert not home.exists()
+
+
+@pytest.mark.parametrize("value", ["shadow", "enforce"])
+def test_mode_shadow_and_enforce_still_record(tmp_path: Path, value: str) -> None:
+    proc = _run(
+        tmp_path, (FIXTURES / "stop.json").read_bytes(), extra={"CLAUDE_PLUGIN_OPTION_MODE": value}
+    )
+    assert proc.returncode == 0 and proc.stdout == b""
+    assert [r["event"] for r in _rows(tmp_path)] == ["stop"]
+
+
+def test_policy_mode_off_skips_the_row_but_still_logs(tmp_path: Path) -> None:
+    """Second line of defense: `mode` set in ~/.verdict/policy.json. The hook
+    itself ran, so hook.log records a `skipped` invocation; no ledger row is
+    written."""
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / "policy.json").write_text(json.dumps({"mode": "off"}), encoding="utf-8")
+
+    proc = _run(tmp_path, (FIXTURES / "stop.json").read_bytes())
+
+    assert proc.returncode == 0 and proc.stdout == b""
+    assert _rows(tmp_path) == []
+    assert [entry["outcome"] for entry in _log(tmp_path)] == ["skipped"]

@@ -401,3 +401,81 @@ def test_is_soft_fail_candidate_true_for_anchored_failure_lines(default_policy: 
 
     pytest_e_line = "E       AssertionError: assert 1 == 2"
     assert gates.is_soft_fail_candidate("Bash", "pytest -q", pytest_e_line, default_policy) is True
+
+
+# --- Final review I1: MCP tools bypassed the never-send check --------------
+#
+# `is_never_send` keyed only on `file_path` and `command`, so an MCP file
+# tool -- `mcp__fs__read {"path": "/home/u/.env"}` -- recorded the path and
+# the server's response like any other tool.
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "tool_input"),
+    [
+        ("mcp__fs__read", {"path": "/home/u/.env"}),  # the reviewer's exact payload
+        ("mcp__fs__read", {"paths": ["/home/u/README.md", "/home/u/.ssh/id_ed25519"]}),
+        ("mcp__fs__open", {"uri": "/home/u/.docker/config.json"}),
+        ("mcp__fs__fetch", {"url": "file:///home/u/.env.local"}),
+        ("mcp__fs__stat", {"filename": "~/.ssh/id_rsa"}),
+        ("mcp__fs__move", {"source": "/tmp/x", "destination": "/home/u/.npmrc"}),
+        ("mcp__nb__edit", {"notebook_path": "/home/u/secrets.key"}),
+        ("mcp__fs__copy", {"target": "/home/u/terraform.tfstate"}),
+        ("mcp__fs__read", {"some_unknown_key": "/home/u/.git-credentials"}),
+        ("Read", {"path": "/home/u/.env"}),
+    ],
+)
+def test_is_never_send_catches_credential_paths_under_other_keys(
+    default_policy: Policy, tool_name: str, tool_input: dict[str, object]
+) -> None:
+    from verdict_hot import gates
+
+    assert gates.is_never_send(tool_name, tool_input, default_policy) is True
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "tool_input"),
+    [
+        ("mcp__fs__read", {"path": "/home/u/src/main.py"}),
+        ("mcp__fs__read", {"paths": ["/home/u/README.md", "/home/u/src/app.ts"]}),
+        ("mcp__fs__search", {"query": "find the env parsing code"}),
+        ("mcp__fs__read", {"some_unknown_key": "/home/u/docs/guide.md"}),
+        # A public key is excluded by path_exclude_globs, MCP or not.
+        ("mcp__fs__read", {"path": "/home/u/.ssh/id_ed25519.pub"}),
+    ],
+)
+def test_is_never_send_leaves_ordinary_mcp_paths_alone(
+    default_policy: Policy, tool_name: str, tool_input: dict[str, object]
+) -> None:
+    from verdict_hot import gates
+
+    assert gates.is_never_send(tool_name, tool_input, default_policy) is False
+
+
+def test_http_urls_are_never_treated_as_filesystem_paths(default_policy: Policy) -> None:
+    """Only `file:` URLs are path-like: a WebFetch of an `.env`-shaped URL
+    path must not be mistaken for reading a local credential file."""
+    from verdict_hot import gates
+
+    assert (
+        gates.is_never_send("WebFetch", {"url": "https://example.com/.env"}, default_policy)
+        is False
+    )
+    assert (
+        gates.is_never_send("mcp__web__get", {"url": "https://example.com/.env"}, default_policy)
+        is False
+    )
+
+
+def test_non_mcp_tools_do_not_scan_arbitrary_string_values(default_policy: Policy) -> None:
+    """The "any top-level path-shaped string" sweep is MCP-only: a Bash
+    command mentioning a path is judged by `bash_patterns`, and an Edit's
+    replacement text is not a path candidate."""
+    from verdict_hot import gates
+
+    assert (
+        gates.is_never_send(
+            "Edit", {"file_path": "notes.md", "new_string": "/home/u/.env"}, default_policy
+        )
+        is False
+    )

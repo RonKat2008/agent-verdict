@@ -168,21 +168,83 @@ def _matches_any_glob(candidate: str, globs: tuple[str, ...]) -> bool:
     return compiled is not None and compiled.match(candidate) is not None
 
 
-def is_never_send(tool_name: str, tool_input: Mapping[str, object], policy: Policy) -> bool:
-    """PLAN 5.1: Write/Edit-style `file_path` glob, or a Bash `command` regex.
+# Field names that carry a filesystem path across the built-in tools and the
+# MCP servers seen in the wild (final review, I1: keying only on `file_path`
+# let `mcp__fs__read {"path": "/home/u/.env"}` through). `url` is handled
+# separately, since only a `file:` URL names a local path.
+_PATH_KEYS = (
+    "file_path",
+    "path",
+    "uri",
+    "filename",
+    "file",
+    "notebook_path",
+    "target",
+    "source",
+    "destination",
+)
+_PATH_LIST_KEYS = ("paths",)
+_FILE_URI_PREFIX = "file://"
+_MCP_TOOL_PREFIX = "mcp__"
+_PATH_SHAPED_PREFIXES = ("/", "~", "./")
 
-    Keys off whichever field is actually present in `tool_input` rather
-    than branching on `tool_name`, so it stays correct if a future tool
-    reuses either field name.
+
+def _local_path(value: str) -> str:
+    """`value` as a local path: a `file:` URI's path part, else itself."""
+    if value.startswith(_FILE_URI_PREFIX):
+        rest = value[len(_FILE_URI_PREFIX) :]
+        slash = rest.find("/")  # drop an authority component (file://host/p)
+        return rest[slash:] if slash > 0 else rest
+    return value
+
+
+def _path_candidates(tool_name: str, tool_input: Mapping[str, object]) -> list[str]:
+    """Every value in `tool_input` that could name a file on this machine.
+
+    Known path-carrying keys are read for every tool. For an MCP tool the
+    server's schema is unknown, so any *top-level* string that looks like a
+    path (`/`, `~/`, `./`) is a candidate too.
+    """
+    candidates: list[str] = []
+    for key in _PATH_KEYS:
+        value = tool_input.get(key)
+        if isinstance(value, str):
+            candidates.append(_local_path(value))
+    for key in _PATH_LIST_KEYS:
+        values = tool_input.get(key)
+        if isinstance(values, (list, tuple)):
+            candidates.extend(_local_path(v) for v in values if isinstance(v, str))
+    url = tool_input.get("url")
+    if isinstance(url, str) and url.startswith(_FILE_URI_PREFIX):
+        candidates.append(_local_path(url))
+    if tool_name.startswith(_MCP_TOOL_PREFIX):
+        for key, value in tool_input.items():
+            is_new_path_shaped_string = (
+                key not in _PATH_KEYS
+                and isinstance(value, str)
+                and value.startswith(_PATH_SHAPED_PREFIXES)
+            )
+            if is_new_path_shaped_string:
+                candidates.append(str(value))
+    return candidates
+
+
+def is_never_send(tool_name: str, tool_input: Mapping[str, object], policy: Policy) -> bool:
+    """PLAN 5.1: a credential-path glob on any path-shaped field, or a Bash
+    `command` regex.
+
+    Keys off whichever fields are actually present in `tool_input` rather
+    than branching on `tool_name`, so it stays correct for a tool that
+    names its path field something other than `file_path` -- including the
+    MCP servers M1's PostToolUse matcher already records (final review, I1).
 
     `path_exclude_globs` (fix round 1 item 4) is checked before
     `path_globs` so a public key (`*.pub`) or an example/template env file
     is never flagged even though it would otherwise match a broader
     include glob (`**/id_rsa*`, `**/.env*`).
     """
-    file_path = tool_input.get("file_path")
-    if isinstance(file_path, str):
-        candidate = os.path.expanduser(file_path)
+    for raw in _path_candidates(tool_name, tool_input):
+        candidate = os.path.expanduser(raw)
         if not _matches_any_glob(
             candidate, policy.never_send.path_exclude_globs
         ) and _matches_any_glob(candidate, policy.never_send.path_globs):

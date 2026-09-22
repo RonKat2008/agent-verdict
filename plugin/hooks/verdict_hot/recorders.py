@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     # already loads it for real (task-6-brief.md's lazy-import pass).
     from .policy import Policy
 
+_MODE_OFF = "off"
 _NEVER_SEND_MARKER = "[never-send]"
 _REDACTION_FAILED_MARKER = "[redaction failed]"
 
@@ -385,7 +386,13 @@ def _load_policy_fail_open() -> Policy:
 def record(payload: Mapping[str, object]) -> str:
     """Parse, build, and append one ledger row for `payload`.
 
-    Returns `"ok"` on success. Raises `parsers.ParseError` for a payload M1
+    Returns `"ok"` on success, or `"skipped"` with no row written when the
+    effective policy's `mode` is `off` (final review, C2). The entry point
+    already exits on the plugin's own `CLAUDE_PLUGIN_OPTION_MODE=off`; this
+    is the second line, for a user who sets `mode` in
+    `~/.verdict/policy.json` instead.
+
+    Raises `parsers.ParseError` for a payload M1
     does not record (PreToolUse, SubagentStop, an unknown hook, or a
     malformed required field); the caller (Task 5's entry point) treats that
     as `skipped`. Any other unexpected exception also propagates, and the
@@ -394,6 +401,8 @@ def record(payload: Mapping[str, object]) -> str:
     """
     event = parsers.parse_event(payload)
     policy = _load_policy_fail_open()
+    if policy.mode.strip().lower() == _MODE_OFF:
+        return "skipped"
     row = build_row(event, policy, time.time())
     ledger.append_row(row)
     return "ok"

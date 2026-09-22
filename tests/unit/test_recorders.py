@@ -513,3 +513,51 @@ def test_cwd_hash_never_imports_hashlib() -> None:
         check=True,
     )
     assert proc.stdout.strip() == "ok"
+
+
+# --- Final review C2: `mode: off` must actually stop recording -------------
+#
+# `mode` was advertised in plugin.json and docs/PRIVACY.md but nothing read
+# it. The entry point handles the plugin option (`CLAUDE_PLUGIN_OPTION_MODE`);
+# `record` is the second line for a user who sets it in
+# `~/.verdict/policy.json`.
+
+
+def _write_user_policy(home: Path, mode: str) -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "policy.json").write_text(json.dumps({"mode": mode}), encoding="utf-8")
+
+
+def test_record_skips_without_a_row_when_policy_mode_is_off(
+    isolated_verdict_home: Path,
+) -> None:
+    _write_user_policy(isolated_verdict_home, "off")
+    payload = _load("session_start.json")
+
+    outcome = recorders.record(payload)
+
+    assert outcome == "skipped"
+    assert ledger.read_session(str(payload["session_id"])) == []
+
+
+def test_record_treats_mode_off_case_insensitively(isolated_verdict_home: Path) -> None:
+    _write_user_policy(isolated_verdict_home, "  OFF  ")
+    payload = _load("stop.json")
+
+    assert recorders.record(payload) == "skipped"
+    assert ledger.read_session(str(payload["session_id"])) == []
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_record_still_writes_a_row_in_shadow_and_enforce(
+    isolated_verdict_home: Path, mode: str
+) -> None:
+    _write_user_policy(isolated_verdict_home, mode)
+    payload = _load("session_start.json")
+
+    outcome = recorders.record(payload)
+
+    assert outcome == "ok"
+    rows = ledger.read_session(str(payload["session_id"]))
+    assert len(rows) == 1
+    assert rows[0]["event"] == "session_start"

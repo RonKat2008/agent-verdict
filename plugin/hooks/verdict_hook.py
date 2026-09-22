@@ -9,9 +9,13 @@ stdout could be read by Claude Code as a JSON hook decision on every exit
 code (VERIFIED_FACTS A15); a non-zero exit shows the user a visible
 "hook error" notice. M1 emits no decisions at all (global-constraints.md).
 
-`VERDICT_DISABLE` and `os.name == "nt"` are checked first, using only the
-`os` and `sys` names already paid for by the interpreter, so a disabled
-hook does almost no work (controller notes, task-5-brief.md). Every
+`VERDICT_DISABLE`, the plugin's own `mode` option
+(`CLAUDE_PLUGIN_OPTION_MODE`, where `off` "disables recording entirely" per
+`plugin/.claude-plugin/plugin.json`), and `os.name == "nt"` are checked
+first, using only the `os` and `sys` names already paid for by the
+interpreter, so a disabled hook does almost no work (controller notes,
+task-5-brief.md). `mode: off` writes nothing at all, not even a hook.log
+line, since the run never reaches an import. Every
 `verdict_hot` module -- `logsafe` included -- is imported lazily, after
 those two checks pass, per the per-event lazy-import rule (D-028).
 
@@ -29,11 +33,14 @@ import os
 import sys
 
 _MAX_STDIN_BYTES = 5 * 1024 * 1024
+_MODE_OFF = "off"
 
 
 def main(argv: list[str]) -> int:
     if os.environ.get("VERDICT_DISABLE"):
         return 0
+    if os.environ.get("CLAUDE_PLUGIN_OPTION_MODE", "").strip().lower() == _MODE_OFF:
+        return 0  # plugin.json: `off` disables recording entirely -- not even hook.log
     if os.name == "nt":
         _log_windows_disabled(argv)
         return 0
