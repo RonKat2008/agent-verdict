@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_verdict import _doctor_interpreter, doctor
+from agent_verdict import _doctor_checks, _doctor_interpreter, doctor
 
 
 @pytest.fixture
@@ -160,3 +160,82 @@ def test_fix_interpreter_skips_a_candidate_that_fails_the_tls_handshake(
 
     assert path is None
     assert "no interpreter" in message.lower()
+
+
+# --- Final review I4: `--no-probe` makes doctor fully network-free ---------
+#
+# README and docs/CONSENT.md claimed "no network calls at all", but
+# `verdict doctor` opens a TLS connection to each provider host, which
+# exposes the machine's IP to them. The probe stays on by default (it is
+# the point of the reachability line) and `--no-probe` turns it off.
+
+
+def test_no_probe_opens_no_connection(
+    cli_verdict_home: Path,
+    working_interpreter: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[str] = []
+
+    def _record(host: str) -> str:
+        calls.append(host)
+        return "reachable"
+
+    monkeypatch.setattr(doctor, "probe_tls", _record)
+
+    assert doctor.main(["--no-probe"]) == 0
+
+    assert calls == []
+    out = capsys.readouterr().out
+    assert "not probed" in out
+    for host in _doctor_checks._PROBE_HOSTS:
+        assert f"tls {host}: not probed" in out
+
+
+def test_probing_is_on_by_default(
+    cli_verdict_home: Path,
+    working_interpreter: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def _record(host: str) -> str:
+        calls.append(host)
+        return "reachable"
+
+    monkeypatch.setattr(doctor, "probe_tls", _record)
+
+    assert doctor.main([]) == 0
+
+    assert calls == list(_doctor_checks._PROBE_HOSTS)
+
+
+def test_no_probe_reports_every_host_as_not_probed_in_json(
+    cli_verdict_home: Path,
+    working_interpreter: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(doctor, "probe_tls", _unreachable)
+
+    assert doctor.main(["--no-probe", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["tls"] == {
+        host: "not probed (--no-probe)" for host in _doctor_checks._PROBE_HOSTS
+    }
+
+
+def test_no_probe_does_not_change_the_exit_code(
+    cli_verdict_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit code still reflects only interpreter resolution and data-root
+    modes (task-6-brief.md)."""
+    monkeypatch.setattr(
+        doctor, "resolve_interpreter", lambda: doctor.InterpreterResolution(None, "none", None)
+    )
+    monkeypatch.setattr(doctor, "probe_tls", _unreachable)
+
+    assert doctor.main(["--no-probe"]) == 1

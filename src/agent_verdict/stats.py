@@ -147,15 +147,19 @@ def _print_report(result: Stats) -> None:
     print(f"date range: {result.date_range['start']} .. {result.date_range['end']}")
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="verdict stats", description="Summarize the local ledger")
+def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """`add_help=False` makes this usable as an argparse `parents=` entry,
+    so `cli.py` reuses these flags instead of redeclaring them."""
+    parser = argparse.ArgumentParser(
+        prog="verdict stats", description="Summarize the local ledger", add_help=add_help
+    )
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     parser.add_argument("--count", action="store_true", help="print only the stop count")
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
+def run(args: argparse.Namespace) -> int:
+    """Run `stats` from an already-parsed namespace (see `doctor.run`)."""
     result = compute_stats()
     if args.count:
         print(result.stops)
@@ -166,4 +170,8 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-__all__ = ["Stats", "compute_stats", "build_arg_parser", "main"]
+def main(argv: list[str] | None = None) -> int:
+    return run(build_arg_parser().parse_args(argv))
+
+
+__all__ = ["Stats", "compute_stats", "build_arg_parser", "run", "main"]

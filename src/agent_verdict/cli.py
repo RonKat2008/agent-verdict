@@ -1,4 +1,13 @@
-"""Command line entry point. Dispatches to the `stats` and `doctor` subcommands."""
+"""Command line entry point. Dispatches to the `stats` and `doctor` subcommands.
+
+Each subcommand owns its flags exactly once: the subparsers are built from
+`stats.build_arg_parser()` and `doctor.build_arg_parser()` as argparse
+`parents`, and the parsed namespace is handed straight to `stats.run` /
+`doctor.run`. Before this, `verdict doctor --no-probe` would have needed a
+second flag declaration here and a third in the argv the dispatcher
+rebuilt, which is exactly how `--fix-interpreter` and friends drifted
+(final review, minor).
+"""
 
 from __future__ import annotations
 
@@ -12,22 +21,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="store_true", help="print the version and exit")
     subparsers = parser.add_subparsers(dest="command")
 
-    stats_parser = subparsers.add_parser("stats", help="summarize the local ledger")
-    stats_parser.add_argument("--json", action="store_true", help="print the report as JSON")
-    stats_parser.add_argument("--count", action="store_true", help="print only the stop count")
-
-    doctor_parser = subparsers.add_parser("doctor", help="diagnose the local environment")
-    doctor_parser.add_argument(
-        "--audit",
-        action="store_true",
-        help="exit 1 if hook.log recorded an exception outcome in the last 7 days",
+    subparsers.add_parser(
+        "stats",
+        help="summarize the local ledger",
+        parents=[stats.build_arg_parser(add_help=False)],
+        add_help=True,
     )
-    doctor_parser.add_argument(
-        "--fix-interpreter",
-        action="store_true",
-        help="probe for a working interpreter and persist it to verdict_home()/interpreter",
+    subparsers.add_parser(
+        "doctor",
+        help="diagnose the local environment",
+        parents=[doctor.build_arg_parser(add_help=False)],
+        add_help=True,
     )
-    doctor_parser.add_argument("--json", action="store_true", help="print the report as JSON")
 
     return parser
 
@@ -37,20 +42,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "stats":
-        stats_argv = ["--json"] if args.json else []
-        if args.count:
-            stats_argv.append("--count")
-        return stats.main(stats_argv)
+        return stats.run(args)
 
     if args.command == "doctor":
-        doctor_argv = []
-        if args.audit:
-            doctor_argv.append("--audit")
-        if args.fix_interpreter:
-            doctor_argv.append("--fix-interpreter")
-        if args.json:
-            doctor_argv.append("--json")
-        return doctor.main(doctor_argv)
+        return doctor.run(args)
 
     if args.version:
         print(f"verdict {__version__}")

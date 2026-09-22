@@ -6,6 +6,12 @@ registration (best-effort, via `claude plugin list`), `hook.log` outcome
 counts for the last 7 days, a per-provider TLS reachability probe built on
 `sslctx.build_context()`, and API key presence.
 
+The TLS probe is the only thing in this package that opens a socket, and
+it exposes this machine's IP to each provider host, so `--no-probe` turns
+it off and `verdict doctor --no-probe` makes no network call at all (final
+review, I4). Probing stays on by default: reachability is the reason the
+section exists.
+
 Only interpreter resolution and data-root modes affect the exit code
 (task-6-brief.md: "Exit code reflects only interpreter resolution and
 data-root modes"). The TLS probe and key presence are informational only,
@@ -87,12 +93,15 @@ class DoctorReport:
         }
 
 
-def build_report() -> DoctorReport:
+_NOT_PROBED = "not probed (--no-probe)"
+
+
+def build_report(probe: bool = True) -> DoctorReport:
     interpreter = resolve_interpreter()
     data_root = check_data_root()
     plugin_registration = check_plugin_registration()
     outcomes = hook_log_outcomes()
-    tls = {host: _safe_probe_tls(host) for host in _PROBE_HOSTS}
+    tls = {host: _safe_probe_tls(host) if probe else _NOT_PROBED for host in _PROBE_HOSTS}
     keys = key_presence()
     return DoctorReport(interpreter, data_root, plugin_registration, outcomes, tls, keys)
 
@@ -128,9 +137,13 @@ def _print_report(report: DoctorReport, fix_result: tuple[str | None, str] | Non
         print(f"key {name}: {status} (informational)")
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
+def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """`add_help=False` makes this usable as an argparse `parents=` entry,
+    so `cli.py` reuses these flags instead of redeclaring them."""
     parser = argparse.ArgumentParser(
-        prog="verdict doctor", description="Diagnose the local agent-verdict environment"
+        prog="verdict doctor",
+        description="Diagnose the local agent-verdict environment",
+        add_help=add_help,
     )
     parser.add_argument(
         "--audit",
@@ -142,14 +155,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="probe for a working interpreter and persist it to verdict_home()/interpreter",
     )
+    parser.add_argument(
+        "--no-probe",
+        action="store_true",
+        help="skip the provider TLS reachability check (makes doctor network-free)",
+    )
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
+def run(args: argparse.Namespace) -> int:
+    """Run `doctor` from an already-parsed namespace.
+
+    `cli.py` builds its `doctor` subparser from `build_arg_parser` and calls
+    this, so every flag is declared exactly once (final review, minor).
+    """
     fix_result = fix_interpreter() if args.fix_interpreter else None
-    report = build_report()
+    report = build_report(probe=not args.no_probe)
     exit_code = exit_code_for(report, args.audit)
     if args.json:
         payload = report.to_dict()
@@ -159,6 +181,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         _print_report(report, fix_result)
     return exit_code
+
+
+def main(argv: list[str] | None = None) -> int:
+    return run(build_arg_parser().parse_args(argv))
 
 
 if __name__ == "__main__":
@@ -178,5 +204,7 @@ __all__ = [
     "key_presence",
     "probe_tls",
     "resolve_interpreter",
+    "build_arg_parser",
+    "run",
     "main",
 ]
