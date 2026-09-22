@@ -213,6 +213,7 @@ def _log_windows_disabled(argv: list[str]) -> None:
 
 
 _STOP_EVENT_NAMES = ("Stop", "SubagentStop")
+_SESSION_END_EVENT_NAME = "SessionEnd"
 
 
 def _handle(start: float) -> tuple[str | None, str, str | None]:
@@ -251,8 +252,24 @@ def _handle(start: float) -> tuple[str | None, str, str | None]:
             outcome = _run_stop(cast(Mapping[str, object], payload), start)
         except Exception as exc:  # noqa: BLE001 - fail-open contract (fix round 1 item 1)
             return session_id, "exception", type(exc).__name__
+    elif isinstance(payload, dict) and payload.get("hook_event_name") == _SESSION_END_EVENT_NAME:
+        _prune_best_effort()
 
     return session_id, outcome, None
+
+
+def _prune_best_effort() -> None:
+    """Bounded SessionEnd-time prune (task-6-brief.md controller notes,
+    ruling 2). Best-effort and silent: `prune.prune` already fails open on
+    its own, and any failure loading the policy here (or importing the
+    module at all) must never affect this hook's outcome or exit code."""
+    try:
+        from verdict_hot import policy as policy_mod
+        from verdict_hot import prune as prune_mod
+
+        prune_mod.prune(policy_mod.load_policy())
+    except Exception:  # noqa: BLE001 - fail-open contract (global-constraints.md)
+        return
 
 
 def _run_stop(payload: Mapping[str, object], start: float) -> str:

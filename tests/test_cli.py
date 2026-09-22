@@ -46,6 +46,36 @@ def test_stats_subcommand_accepts_every_stats_flag() -> None:
     assert stats_flags <= set(vars(args))
 
 
+def test_policy_lint_is_a_nested_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agent_verdict import policy_lint
+
+    seen: dict[str, object] = {}
+
+    def _fake_run(args: argparse.Namespace) -> int:
+        seen["file"] = args.file
+        return 0
+
+    monkeypatch.setattr(policy_lint, "run", _fake_run)
+
+    assert main(["policy", "lint", "some-file.json"]) == 0
+    assert seen == {"file": "some-file.json"}
+
+
+def test_every_new_subcommand_dispatches(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agent_verdict import export, purge, replay, show
+
+    for module, argv in (
+        (show, ["show", "s1"]),
+        (replay, ["replay", "--policy", "p.json"]),
+        (purge, ["purge", "--all", "--yes"]),
+        (export, ["export", "--goldset", "--out", "o.jsonl"]),
+    ):
+        called: list[int] = []
+        monkeypatch.setattr(module, "run", lambda args, called=called: called.append(1) or 0)
+        assert main(argv) == 0
+        assert called == [1]
+
+
 def test_cli_doctor_passes_no_probe_through(monkeypatch: pytest.MonkeyPatch) -> None:
     from agent_verdict import doctor
 

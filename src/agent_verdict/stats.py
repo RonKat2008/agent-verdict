@@ -17,16 +17,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from agent_verdict.verdict_hot import ledger
+from agent_verdict.verdict_hot.breaker import Breaker
 
 _TOOL_EVENT = "post"
 _FAILURE_EVENT = "post_fail"
 _STOP_EVENT = "stop"
+_ACTION_EVENT = "action"
+_EVIDENCE_GATE_REASON = "evidence"
+_GATE_UNAVAILABLE_ACTION = "gate_unavailable"
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,11 @@ class Stats:
     redaction_hits: int
     rows_per_event: dict[str, int] = field(default_factory=dict)
     date_range: dict[str, str | None] = field(default_factory=lambda: {"start": None, "end": None})
+    jev_reach_rate: float = 0.0
+    actions_by_kind: dict[str, int] = field(default_factory=dict)
+    would_have_by_kind: dict[str, int] = field(default_factory=dict)
+    gate_unavailable_count: int = 0
+    breaker_open: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +64,11 @@ class Stats:
             "redaction_hits": self.redaction_hits,
             "rows_per_event": dict(self.rows_per_event),
             "date_range": dict(self.date_range),
+            "jev_reach_rate": self.jev_reach_rate,
+            "actions_by_kind": dict(self.actions_by_kind),
+            "would_have_by_kind": dict(self.would_have_by_kind),
+            "gate_unavailable_count": self.gate_unavailable_count,
+            "breaker_open": self.breaker_open,
         }
 
 
@@ -80,6 +95,11 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
     rows_per_event: dict[str, int] = {}
     min_ts: float | None = None
     max_ts: float | None = None
+    action_rows_total = 0
+    action_rows_evidence = 0
+    actions_by_kind: dict[str, int] = {}
+    would_have_by_kind: dict[str, int] = {}
+    gate_unavailable_count = 0
 
     for row in rows:
         event = row.get("event")
@@ -100,6 +120,18 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
             claims = row.get("claims")
             if isinstance(claims, (list, tuple)) and len(claims) > 0:
                 stops_with_claim += 1
+        elif event == _ACTION_EVENT:
+            action_rows_total += 1
+            if row.get("gate_reason") == _EVIDENCE_GATE_REASON:
+                action_rows_evidence += 1
+            action = row.get("action")
+            if isinstance(action, str):
+                actions_by_kind[action] = actions_by_kind.get(action, 0) + 1
+                if action == _GATE_UNAVAILABLE_ACTION:
+                    gate_unavailable_count += 1
+            would_have = row.get("would_have")
+            if isinstance(would_have, str):
+                would_have_by_kind[would_have] = would_have_by_kind.get(would_have, 0) + 1
 
         if row.get("never_send") is True:
             never_send_rows += 1
@@ -113,6 +145,8 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
             min_ts = ts if min_ts is None else min(min_ts, ts)
             max_ts = ts if max_ts is None else max(max_ts, ts)
 
+    jev_reach_rate = action_rows_evidence / action_rows_total if action_rows_total else 0.0
+
     return Stats(
         sessions=len(sessions),
         prompts=prompts,
@@ -124,11 +158,22 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
         redaction_hits=redaction_hits,
         rows_per_event=rows_per_event,
         date_range={"start": _to_iso(min_ts), "end": _to_iso(max_ts)},
+        jev_reach_rate=jev_reach_rate,
+        actions_by_kind=actions_by_kind,
+        would_have_by_kind=would_have_by_kind,
+        gate_unavailable_count=gate_unavailable_count,
+        breaker_open=Breaker().is_open(time.time()),
     )
 
 
 def compute_stats(rows: Iterable[Mapping[str, object]] | None = None) -> Stats:
-    """Aggregate ledger rows. Reads the real ledger when `rows` is omitted."""
+    """Aggregate ledger rows. Reads the real ledger when `rows` is omitted.
+
+    `breaker_open` is read live from `~/.verdict/breaker.json` every call
+    (never derived from the passed-in `rows`, since the breaker's state is
+    not itself a ledger row) -- an injected `rows` iterable still reports
+    the real, current breaker state.
+    """
     return _aggregate(rows if rows is not None else _load_all_rows())
 
 
@@ -145,6 +190,11 @@ def _print_report(result: Stats) -> None:
     for event_name in sorted(result.rows_per_event):
         print(f"  {event_name}: {result.rows_per_event[event_name]}")
     print(f"date range: {result.date_range['start']} .. {result.date_range['end']}")
+    print(f"jev reach rate: {result.jev_reach_rate:.3f}")
+    print(f"actions by kind: {result.actions_by_kind}")
+    print(f"would_have by kind: {result.would_have_by_kind}")
+    print(f"gate_unavailable count: {result.gate_unavailable_count}")
+    print(f"breaker open: {result.breaker_open}")
 
 
 def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:

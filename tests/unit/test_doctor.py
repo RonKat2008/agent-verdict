@@ -45,7 +45,12 @@ def test_exits_zero_with_no_keys_and_unreachable_provider(
     working_interpreter: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "ANTHROPIC_API_KEY"):
+    for name in (
+        "CLAUDE_PLUGIN_OPTION_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TYPESAFE_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(doctor, "probe_tls", _unreachable)
 
@@ -53,6 +58,7 @@ def test_exits_zero_with_no_keys_and_unreachable_provider(
 
     report = doctor.build_report()
     assert report.keys == {
+        "CLAUDE_PLUGIN_OPTION_API_KEY": "absent",
         "OPENROUTER_API_KEY": "absent",
         "TYPESAFE_API_KEY": "absent",
         "ANTHROPIC_API_KEY": "absent",
@@ -225,6 +231,52 @@ def test_no_probe_reports_every_host_as_not_probed_in_json(
     assert payload["tls"] == {
         host: "not probed (--no-probe)" for host in _doctor_checks._PROBE_HOSTS
     }
+
+
+def test_breaker_state_is_reported_and_never_affects_exit_code(
+    cli_verdict_home: Path,
+    working_interpreter: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_verdict.verdict_hot.breaker import Breaker
+
+    monkeypatch.setattr(doctor, "probe_tls", _unreachable)
+
+    report_closed = doctor.build_report()
+    assert report_closed.breaker_open is False
+
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    Breaker().record(429, 1000.0)
+    Breaker().record(429, 1000.0)
+    Breaker().record(429, 1000.0)
+
+    assert doctor.main([]) == 0
+    report_open = doctor.build_report()
+    assert report_open.breaker_open is True
+
+
+def test_live_smoke_flag_exists_and_is_off_by_default(
+    cli_verdict_home: Path,
+    working_interpreter: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        calls.append(args)
+        raise AssertionError("no transport should be built without --live-smoke")
+
+    monkeypatch.setattr(doctor, "probe_tls", _unreachable)
+    monkeypatch.setattr("agent_verdict.verdict_hot.provider.evaluate", _boom)
+
+    assert doctor.main([]) == 0
+
+    assert calls == []
+    # The flag parses cleanly (even though it is never exercised by a real
+    # network call in tests, per the hazards note).
+    parser = doctor.build_arg_parser()
+    args = parser.parse_args(["--live-smoke"])
+    assert args.live_smoke is True
 
 
 def test_no_probe_does_not_change_the_exit_code(

@@ -110,3 +110,70 @@ def test_default_output_is_human_readable_text(
     out = capsys.readouterr().out
     assert "sessions: 2" in out
     assert "stops: 2" in out
+
+
+def _action_row(session_id: str, ts: float, **extra: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "schema_v": 1,
+        "session_id": session_id,
+        "event": "action",
+        "ts": ts,
+        "prompt_id": None,
+        "agent_id": None,
+        "action": "pass",
+        "would_have": None,
+        "mode": "shadow",
+        "hook_ms": 1.0,
+        "open_failures": [],
+    }
+    row.update(extra)
+    return row
+
+
+def _seed_action_rows() -> None:
+    ledger.append_row(_action_row("s1", 1.0, action="pass", gate_reason="evidence"))
+    ledger.append_row(
+        _action_row("s1", 2.0, action="pass", would_have="block", gate_reason="evidence")
+    )
+    ledger.append_row(
+        _action_row("s1", 3.0, action="flag", would_have=None, gate_reason="evidence")
+    )
+    ledger.append_row(_action_row("s1", 4.0, action="pass", gate_reason="skipped_plan_mode"))
+    ledger.append_row(_action_row("s1", 5.0, action="gate_unavailable", gate_reason="no_key"))
+
+
+def test_jev_reach_rate_and_action_breakdowns(cli_verdict_home: Path) -> None:
+    _seed_action_rows()
+
+    result = stats.compute_stats()
+
+    assert result.jev_reach_rate == pytest.approx(3 / 5)
+    assert result.actions_by_kind == {"pass": 3, "flag": 1, "gate_unavailable": 1}
+    assert result.would_have_by_kind == {"block": 1}
+    assert result.gate_unavailable_count == 1
+
+
+def test_jev_reach_rate_is_zero_with_no_action_rows(cli_verdict_home: Path) -> None:
+    result = stats.compute_stats()
+
+    assert result.jev_reach_rate == 0.0
+    assert result.actions_by_kind == {}
+    assert result.would_have_by_kind == {}
+    assert result.gate_unavailable_count == 0
+
+
+def test_breaker_open_reflects_the_breaker_state_file(
+    cli_verdict_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_verdict.verdict_hot.breaker import Breaker
+
+    result_closed = stats.compute_stats()
+    assert result_closed.breaker_open is False
+
+    Breaker().record(429, 1000.0)
+    Breaker().record(429, 1000.0)
+    Breaker().record(429, 1000.0)
+    monkeypatch.setattr("time.time", lambda: 1000.0)
+
+    result_open = stats.compute_stats()
+    assert result_open.breaker_open is True

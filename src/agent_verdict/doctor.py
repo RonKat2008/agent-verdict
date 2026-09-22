@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -39,6 +40,7 @@ from agent_verdict import _doctor_checks as checks
 from agent_verdict._doctor_checks import (
     _PROBE_HOSTS,
     DataRootCheck,
+    breaker_open,
     check_data_root,
     check_plugin_registration,
     hook_log_outcomes,
@@ -69,6 +71,7 @@ class DoctorReport:
     hook_log_outcomes: dict[str, int]
     tls: dict[str, str]
     keys: dict[str, str]
+    breaker_open: bool
 
     @property
     def exception_in_window(self) -> bool:
@@ -90,6 +93,7 @@ class DoctorReport:
             "hook_log_outcomes": dict(self.hook_log_outcomes),
             "tls": dict(self.tls),
             "keys": dict(self.keys),
+            "breaker_open": self.breaker_open,
         }
 
 
@@ -103,7 +107,9 @@ def build_report(probe: bool = True) -> DoctorReport:
     outcomes = hook_log_outcomes()
     tls = {host: _safe_probe_tls(host) if probe else _NOT_PROBED for host in _PROBE_HOSTS}
     keys = key_presence()
-    return DoctorReport(interpreter, data_root, plugin_registration, outcomes, tls, keys)
+    return DoctorReport(
+        interpreter, data_root, plugin_registration, outcomes, tls, keys, breaker_open()
+    )
 
 
 def exit_code_for(report: DoctorReport, audit: bool) -> int:
@@ -135,6 +141,40 @@ def _print_report(report: DoctorReport, fix_result: tuple[str | None, str] | Non
         print(f"tls {host}: {status} (informational)")
     for name, status in report.keys.items():
         print(f"key {name}: {status} (informational)")
+    print(f"breaker open: {report.breaker_open} (informational)")
+
+
+def _run_live_smoke() -> str:
+    """Send one tiny real request to the configured provider and summarize
+    the result. Never exercised by a test (hazards note, task-6-brief.md):
+    it is the one code path in this package that makes a real network
+    call. Imports are lazy so no test that never passes `--live-smoke`
+    pays for, or accidentally triggers, this import."""
+    from agent_verdict.verdict_hot import policy as policy_mod
+    from agent_verdict.verdict_hot import provider as provider_mod
+
+    active_policy = policy_mod.load_policy()
+    preset = provider_mod.PRESETS.get(
+        active_policy.provider.default, provider_mod.PRESETS["openrouter"]
+    )
+    api_key = os.environ.get("CLAUDE_PLUGIN_OPTION_API_KEY") or os.environ.get(preset.key_env)
+    if not api_key:
+        return "error: no_key"
+
+    minimal_state = {
+        "trusted_facts": {"steps": [], "unresolved_failures": []},
+        "untrusted": {"claims": {}, "step_output_excerpts": {}, "final_message": ""},
+    }
+    minimal_questions = {"claims_done": {"type": "noul"}, "claims_check_passed": {"type": "noul"}}
+    try:
+        result = provider_mod.evaluate(
+            minimal_state, minimal_questions, preset, api_key, active_policy.provider.deadline_s
+        )
+    except Exception as exc:  # noqa: BLE001 - summarize any failure, never crash doctor
+        return f"error: {type(exc).__name__}"
+    if not result.ok:
+        return f"error: {result.error}"
+    return f"ok {result.model_returned} {result.conn_ms:.0f} {result.infer_ms:.0f}"
 
 
 def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
@@ -161,6 +201,11 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
         help="skip the provider TLS reachability check (makes doctor network-free)",
     )
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
+    parser.add_argument(
+        "--live-smoke",
+        action="store_true",
+        help="send one real, tiny request to the configured provider (makes a network call)",
+    )
     return parser
 
 
@@ -173,13 +218,18 @@ def run(args: argparse.Namespace) -> int:
     fix_result = fix_interpreter() if args.fix_interpreter else None
     report = build_report(probe=not args.no_probe)
     exit_code = exit_code_for(report, args.audit)
+    live_smoke_result = _run_live_smoke() if getattr(args, "live_smoke", False) else None
     if args.json:
         payload = report.to_dict()
         if fix_result is not None:
             payload["fix_interpreter"] = {"path": fix_result[0], "message": fix_result[1]}
+        if live_smoke_result is not None:
+            payload["live_smoke"] = live_smoke_result
         print(json.dumps(payload))
     else:
         _print_report(report, fix_result)
+        if live_smoke_result is not None:
+            print(f"live-smoke: {live_smoke_result}")
     return exit_code
 
 

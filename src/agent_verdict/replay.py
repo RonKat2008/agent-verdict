@@ -1,0 +1,269 @@
+"""`verdict replay --policy <file> [--since <date>] [--json]`
+(task-6-brief.md ruling 1; PLAN.md 5.5, the replay contract).
+
+For each stored `action` row whose `gate_reason == "evidence"` (a real
+provider evaluation -- stand-downs, `gate_unavailable`, and the
+`always_verify` path with no real evidence are all skipped and counted),
+`replay` reconstructs the same inputs `stop.py` used to call
+`verdict_policy.decide` and recomputes it under a given policy:
+
+- **answers**: the `verdict` rows written immediately before this action
+  row for the same `(session_id, prompt_id, agent_id)` key.
+- **span**: rebuilt by `span.build_span` over the session's own rows,
+  never re-derived by hand (controller notes).
+- **claim_ids**: `c1..cN` where `N` is the length of the `claims` list on
+  the most recent `stop` row seen so far for this key -- the same list
+  `state.build_state` numbered when the row was first written.
+
+"Old" is the row's `would_have` when present (shadow mode, or an
+enforce-mode decision resolved to something other than what actually
+happened), else its `action`. `moved_by` is the first threshold, in the
+fixed order `t_done, t_ack, t_check, t_soft, t_claim`, whose value differs
+between the *shipped* packaged policy and the replay policy AND whose
+relevant answer probability for this row falls between the two values;
+`"-"` when nothing moved.
+
+The "shipped" policy compared against is always the packaged default
+(`policy.default_policy_path()`) -- this milestone ships exactly one
+policy version, so there is no registry of historical shipped policies to
+look a row's own `policy_version` up in. Revisit this if a second shipped
+version is ever cut while old rows are still being replayed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from agent_verdict.verdict_hot import ledger, verdict_policy
+from agent_verdict.verdict_hot import policy as policy_mod
+from agent_verdict.verdict_hot import span as span_mod
+from agent_verdict.verdict_hot.policy import Policy
+from agent_verdict.verdict_hot.span import Span
+
+_THRESHOLD_ORDER = ("t_done", "t_ack", "t_check", "t_soft", "t_claim")
+_QUESTION_KEY_FOR = {
+    "t_done": "claims_done",
+    "t_ack": "acks_failures",
+    "t_check": "claims_check_passed",
+}
+
+
+def _noul_value(answers: Mapping[str, object], key: str) -> float | None:
+    answer = answers.get(key)
+    if not isinstance(answer, Mapping):
+        return None
+    value = answer.get("noul")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _probes_for(
+    name: str, answers: Mapping[str, object], span: Span, claim_ids: tuple[str, ...]
+) -> list[float]:
+    fixed_key = _QUESTION_KEY_FOR.get(name)
+    if fixed_key is not None:
+        value = _noul_value(answers, fixed_key)
+        return [value] if value is not None else []
+    if name == "t_soft":
+        keys = [f"softfail_{seq}" for seq in span.soft_fail_seqs]
+    elif name == "t_claim":
+        keys = [f"claim_{claim_id}" for claim_id in claim_ids]
+    else:
+        return []
+    return [v for v in (_noul_value(answers, k) for k in keys) if v is not None]
+
+
+def _moved_by(
+    shipped: Policy,
+    replay_policy: Policy,
+    answers: Mapping[str, object],
+    span: Span,
+    claim_ids: tuple[str, ...],
+) -> str:
+    for name in _THRESHOLD_ORDER:
+        old_value = getattr(shipped.thresholds, name)
+        new_value = getattr(replay_policy.thresholds, name)
+        if old_value == new_value:
+            continue
+        lo, hi = (old_value, new_value) if old_value <= new_value else (new_value, old_value)
+        probes = _probes_for(name, answers, span, claim_ids)
+        if any(lo <= probe <= hi for probe in probes):
+            return name
+    return "-"
+
+
+def _old_action(row: Mapping[str, object]) -> object:
+    would_have = row.get("would_have")
+    return would_have if would_have is not None else row.get("action")
+
+
+def _since_cutoff(raw: str | None) -> float | None:
+    if raw is None:
+        return None
+    return datetime.fromisoformat(raw).replace(tzinfo=UTC).timestamp()
+
+
+class _ReplayRow:
+    __slots__ = (
+        "session_id",
+        "prompt_id",
+        "agent_id",
+        "old",
+        "new",
+        "moved_by",
+        "rule_id_old",
+        "rule_id_new",
+    )
+
+    def __init__(
+        self,
+        session_id: str,
+        prompt_id: str | None,
+        agent_id: str | None,
+        old: object,
+        new: str,
+        moved_by: str,
+        rule_id_old: object,
+        rule_id_new: str | None,
+    ) -> None:
+        self.session_id = session_id
+        self.prompt_id = prompt_id
+        self.agent_id = agent_id
+        self.old = old
+        self.new = new
+        self.moved_by = moved_by
+        self.rule_id_old = rule_id_old
+        self.rule_id_new = rule_id_new
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "prompt_id": self.prompt_id,
+            "agent_id": self.agent_id,
+            "old": self.old,
+            "new": self.new,
+            "moved_by": self.moved_by,
+            "rule_id_old": self.rule_id_old,
+            "rule_id_new": self.rule_id_new,
+        }
+
+    def to_line(self) -> str:
+        return (
+            f"{self.session_id} {self.prompt_id} old={self.old} new={self.new} "
+            f"moved_by={self.moved_by}"
+        )
+
+
+def _replay_session(
+    session_id: str,
+    rows: list[dict[str, object]],
+    shipped: Policy,
+    replay_policy: Policy,
+    since: float | None,
+) -> tuple[list[_ReplayRow], int]:
+    pending_verdicts: dict[tuple[object, object], list[dict[str, object]]] = {}
+    stop_claim_counts: dict[tuple[object, object], int] = {}
+    out: list[_ReplayRow] = []
+    skipped = 0
+
+    for row in rows:
+        event = row.get("event")
+        prompt_id = row.get("prompt_id")
+        agent_id = row.get("agent_id")
+        key = (prompt_id, agent_id)
+
+        if event == "stop":
+            claims = row.get("claims")
+            stop_claim_counts[key] = len(claims) if isinstance(claims, list) else 0
+            continue
+
+        if event == "verdict":
+            pending_verdicts.setdefault(key, []).append(row)
+            continue
+
+        if event != "action":
+            continue
+
+        verdict_rows = pending_verdicts.pop(key, [])
+        ts = row.get("ts")
+        if since is not None and isinstance(ts, (int, float)) and ts < since:
+            skipped += 1
+            continue
+        if row.get("gate_reason") != "evidence":
+            skipped += 1
+            continue
+
+        answers: dict[str, object] = {
+            key_str: r.get("answer")
+            for r in verdict_rows
+            if isinstance(key_str := r.get("question_key"), str)
+        }
+        claim_ids = tuple(f"c{i}" for i in range(1, stop_claim_counts.get(key, 0) + 1))
+        pid_for_span = prompt_id if isinstance(prompt_id, str) else None
+        span = span_mod.build_span(rows, pid_for_span, replay_policy)
+        decision = verdict_policy.decide(answers, span, replay_policy, claim_ids)
+        moved_by = _moved_by(shipped, replay_policy, answers, span, claim_ids)
+
+        out.append(
+            _ReplayRow(
+                session_id=session_id,
+                prompt_id=prompt_id if isinstance(prompt_id, str) or prompt_id is None else None,
+                agent_id=agent_id if isinstance(agent_id, str) or agent_id is None else None,
+                old=_old_action(row),
+                new=decision.action,
+                moved_by=moved_by,
+                rule_id_old=row.get("rule_id"),
+                rule_id_new=decision.rule_id,
+            )
+        )
+
+    return out, skipped
+
+
+def replay(replay_policy: Policy, since: float | None = None) -> tuple[list[_ReplayRow], int]:
+    shipped = policy_mod.load_policy(policy_mod.default_policy_path())
+    rows_out: list[_ReplayRow] = []
+    skipped_total = 0
+    for session_path in ledger.iter_sessions():
+        session_id = session_path.stem
+        rows = ledger.read_session(session_id)
+        replayed, skipped = _replay_session(session_id, rows, shipped, replay_policy, since)
+        rows_out.extend(replayed)
+        skipped_total += skipped
+    return rows_out, skipped_total
+
+
+def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="verdict replay",
+        description="Re-evaluate stored verdicts under a policy",
+        add_help=add_help,
+    )
+    parser.add_argument("--policy", required=True, help="path to the policy file to replay under")
+    parser.add_argument("--since", default=None, help="only rows at or after this ISO date")
+    parser.add_argument("--json", action="store_true", help="emit one JSON object per line")
+    return parser
+
+
+def run(args: argparse.Namespace) -> int:
+    replay_policy = policy_mod.load_policy(Path(args.policy))
+    since = _since_cutoff(args.since)
+    rows, skipped = replay(replay_policy, since)
+
+    for row in rows:
+        print(json.dumps(row.to_dict(), sort_keys=True) if args.json else row.to_line())
+    print(f"skipped={skipped}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    return run(build_arg_parser().parse_args(argv))
+
+
+__all__ = ["replay", "build_arg_parser", "run", "main"]

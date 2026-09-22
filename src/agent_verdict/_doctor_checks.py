@@ -18,8 +18,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent_verdict.verdict_hot import paths, sslctx
+from agent_verdict.verdict_hot.breaker import Breaker
 
-_KEY_ENV_NAMES = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "ANTHROPIC_API_KEY")
+_KEY_ENV_NAMES = (
+    "CLAUDE_PLUGIN_OPTION_API_KEY",
+    "OPENROUTER_API_KEY",
+    "TYPESAFE_API_KEY",
+    "ANTHROPIC_API_KEY",
+)
 _PROBE_HOSTS = ("openrouter.ai", "api.typesafe.ai")
 _TLS_PROBE_TIMEOUT = 3.0
 _PLUGIN_LIST_TIMEOUT = 10.0
@@ -131,6 +137,13 @@ def key_presence() -> dict[str, str]:
     return {name: ("present" if os.environ.get(name) else "absent") for name in _KEY_ENV_NAMES}
 
 
+def breaker_open(now: float | None = None) -> bool:
+    """Whether the provider circuit breaker (`~/.verdict/breaker.json`) is
+    currently open. Informational only, like the TLS probe and key
+    presence above -- never affects `doctor`'s exit code."""
+    return Breaker().is_open(now if now is not None else time.time())
+
+
 __all__ = [
     "DataRootCheck",
     "check_data_root",
@@ -138,6 +151,7 @@ __all__ = [
     "hook_log_outcomes",
     "probe_tls",
     "key_presence",
+    "breaker_open",
     "_PROBE_HOSTS",
     "_KEY_ENV_NAMES",
 ]

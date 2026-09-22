@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -155,6 +156,37 @@ def test_interpreter_file_is_honored_when_valid(tmp_path: Path) -> None:
     (tmp_path / "interpreter").write_text(python + "\n")
     proc = _run(tmp_path, (FIXTURES / "session_end.json").read_bytes())
     assert proc.returncode == 0 and len(_rows(tmp_path)) == 1
+
+
+def test_session_end_prunes_an_old_stopless_session(tmp_path: Path) -> None:
+    """task-6-brief.md controller notes, ruling 2: the SessionEnd hook runs
+    the bounded automatic prune, which removes an old session that never
+    reached a real Stop event (an aborted or empty session)."""
+    tmp_path.mkdir(exist_ok=True)
+    events_dir = tmp_path / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    old_session = events_dir / "old-stopless-session.jsonl"
+    old_session.write_text(
+        json.dumps(
+            {
+                "schema_v": 1,
+                "session_id": "old-stopless-session",
+                "event": "session_start",
+                "ts": 1.0,
+                "prompt_id": None,
+                "agent_id": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    old_time = time.time() - 100 * 86400
+    os.utime(old_session, (old_time, old_time))
+
+    proc = _run(tmp_path, (FIXTURES / "session_end.json").read_bytes())
+
+    assert proc.returncode == 0 and proc.stdout == b""
+    assert not old_session.exists()
 
 
 def test_file_modes_are_private(tmp_path: Path) -> None:
