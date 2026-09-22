@@ -44,9 +44,14 @@ if TYPE_CHECKING:
 _GIT_RESET_HARD_RE = re.compile(r"\bgit\s+reset\s+--hard\b")
 _GIT_TOPLEVEL_SUBST = "$(git rev-parse --show-toplevel)"
 _STATIC_DANGEROUS_RM_TARGETS = frozenset({"/", "~", "$HOME", "${HOME}"})
+_BARE_CWD_GLOB_TARGETS = frozenset({"*", ".", "./*"})
 _ALL_SLASHES_RE = re.compile(r"/+")
 _SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|\||\n")
-_VAR_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# Fix round 2 item 1: matches one whole "..."/'...' span (including its
+# quote characters) so its contents can be blanked out before a segment
+# separator is ever searched for -- `X="|" rm -rf /` is one segment, not a
+# stray `"` followed by a bogus second one.
+_QUOTED_SPAN_RE = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\']*\'')
 _GIT_PUSH_RE = re.compile(r"\bgit\s+push\b")
 _FORCE_FLAG_RE = re.compile(r"--force(?!-with-lease)\b|-f\b")
 _PROTECTED_BRANCH_NAMES = frozenset({"main", "master", "prod", "production", "release"})
@@ -126,6 +131,28 @@ def _match_denylist(command: str, cwd: str, policy: Policy) -> str | None:
     return None
 
 
+def _mask_quoted_spans(command: str) -> str:
+    """`command` with every quoted span's contents replaced by `#` of the
+    same length (fix round 2 item 1). Used only to find segment-separator
+    positions safely; callers slice the ORIGINAL text at those offsets, so
+    real quote characters and content survive for tokenization."""
+    return _QUOTED_SPAN_RE.sub(lambda m: "#" * len(m.group(0)), command)
+
+
+def _split_segments(command: str) -> list[str]:
+    """Split `command` on `&&`/`||`/`;`/`|`/newline, never inside a quoted
+    span: `X="|" rm -rf /` is one segment, not a stray `"` and a bogus
+    second piece (fix round 2 item 1)."""
+    masked = _mask_quoted_spans(command)
+    segments: list[str] = []
+    last = 0
+    for match in _SEGMENT_SPLIT_RE.finditer(masked):
+        segments.append(command[last : match.start()])
+        last = match.end()
+    segments.append(command[last:])
+    return segments
+
+
 def _shlex_tokens(segment: str) -> list[str]:
     """Best-effort shell tokenization: falls back to a plain whitespace split
     on unbalanced quotes rather than raising (`shlex.split`'s `ValueError`),
@@ -162,7 +189,7 @@ def _check_force_push_extra(command: str, _cwd: str) -> bool:
     """Scoped to one `git push` segment at a time (fix round 1 item 8): a
     force flag in one `&&`-joined command and an unrelated mention of a
     protected branch name in another must not combine into a false deny."""
-    for segment in _SEGMENT_SPLIT_RE.split(command):
+    for segment in _split_segments(command):
         if not _GIT_PUSH_RE.search(segment) or not _FORCE_FLAG_RE.search(segment):
             continue
         if any(_is_protected_branch_token(t) for t in _shlex_tokens(segment)):
@@ -172,16 +199,21 @@ def _check_force_push_extra(command: str, _cwd: str) -> bool:
 
 def _parse_rm_segment(segment: str) -> tuple[bool, list[str]] | None:
     """`(has_recursive_flag, targets)` if `segment` is an `rm` invocation
-    (after skipping leading `VAR=value` assignments and `sudo`), else None."""
-    tokens = _shlex_tokens(segment)
+    (after stripping leading `VAR=value` assignments and wrapper commands
+    such as `sudo`/`env`), else None.
 
-    index = 0
-    while index < len(tokens) and (tokens[index] == "sudo" or _VAR_ASSIGN_RE.match(tokens[index])):
-        index += 1
-    if index >= len(tokens) or tokens[index] not in ("rm", "/bin/rm", "/usr/bin/rm"):
+    Reuses `gates._strip_leading` (fix round 2 item 4) rather than
+    duplicating its wrapper table with a narrower, rules.py-only copy that
+    only knew about `sudo`: `env rm -rf /` and `env FOO=1 rm -rf /` were
+    missed before this, since `env` was never in that narrower list.
+    """
+    from .gates import _strip_leading
+
+    tokens = _shlex_tokens(_strip_leading(segment))
+    if not tokens or tokens[0] not in ("rm", "/bin/rm", "/usr/bin/rm"):
         return None
 
-    rest = tokens[index + 1 :]
+    rest = tokens[1:]
     flags = [t for t in rest if t != "-" and t != "--" and t.startswith("-")]
     targets = [t for t in rest if t not in ("-", "--") and not t.startswith("-")]
     has_recursive = "r" in "".join(flags).lower()
@@ -209,10 +241,40 @@ def _normalize_rm_target(target: str) -> str:
     return os.path.normpath(stripped)
 
 
+def _resolve_rm_target(target: str, cwd: str) -> str:
+    """The effective path `target` refers to, for the danger comparison
+    below (fix round 2 item 2). A bare `*`, `.`, or `./*` expands relative
+    to `cwd` itself: `rm -rf *` run in `/` is as destructive as `rm -rf /`,
+    but the same command in `/tmp/x` is not -- resolve it against `cwd`
+    rather than the old behavior, which mapped a bare `*` to `/`
+    unconditionally regardless of where it actually ran.
+    """
+    if target in _BARE_CWD_GLOB_TARGETS and cwd:
+        return _normalize_rm_target(cwd)
+    return _normalize_rm_target(target)
+
+
+def _target_is_repo_root(normalized_target: str, repo_root: str) -> bool:
+    """`os.path.realpath` the rm target before comparing to `repo_root`
+    (fix round 2 item 3): `_find_repo_root` already resolves symlinks in
+    `cwd` (fix round 1 item 7), so `rm -rf /symlink/to/repo` -- a target
+    reached through a *different* symlink than the one `cwd` used -- must
+    resolve the same way to still match. Only applied to an absolute
+    path: the static sentinels (`~`, `$HOME`, ...) are handled by the
+    caller before this is ever reached, and `os.path.realpath` on a
+    relative string would resolve against the wrong (process) cwd.
+    """
+    if normalized_target == repo_root:
+        return True
+    if not os.path.isabs(normalized_target):
+        return False
+    return os.path.realpath(normalized_target) == repo_root
+
+
 def _check_rm_root_extra(command: str, cwd: str) -> bool:
     repo_root: str | None = None
     repo_root_checked = False
-    for segment in _SEGMENT_SPLIT_RE.split(command):
+    for segment in _split_segments(command):
         parsed = _parse_rm_segment(segment)
         if parsed is None or not parsed[0]:
             continue
@@ -222,10 +284,10 @@ def _check_rm_root_extra(command: str, cwd: str) -> bool:
             repo_root = _find_repo_root(cwd)
             repo_root_checked = True
         for target in parsed[1]:
-            normalized = _normalize_rm_target(target)
+            normalized = _resolve_rm_target(target, cwd)
             if normalized in _STATIC_DANGEROUS_RM_TARGETS:
                 return True
-            if repo_root is not None and normalized == repo_root:
+            if repo_root is not None and _target_is_repo_root(normalized, repo_root):
                 return True
     return False
 

@@ -291,6 +291,17 @@ def test_is_check_stays_false_for_incidental_mentions(default_policy: Policy, co
     assert gates.is_check(command, default_policy) is False
 
 
+@pytest.mark.parametrize("command", ["env pytest -q", "env NODE_ENV=test pytest -q"])
+def test_is_check_recognizes_runners_behind_env(default_policy: Policy, command: str) -> None:
+    """rules.py fix round 2 item 4: `env` joins `_WRAPPERS` so the
+    PreToolUse rules gate can reuse `_strip_leading` for `env rm -rf /`;
+    `is_check` (the only other `_WRAPPERS` consumer) picks up the same
+    stripping for free."""
+    from verdict_hot import gates
+
+    assert gates.is_check(command, default_policy) is True
+
+
 def test_is_check_honors_checks_extra(default_policy: Policy) -> None:
     from verdict_hot import gates
 

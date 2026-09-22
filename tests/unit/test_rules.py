@@ -363,3 +363,72 @@ def test_force_push_refspec_variants_stay_denied(
     decision = rules.decide("Bash", _bash(command), default_policy, CWD)
     assert decision.decision == "deny"
     assert decision.rule_id == "deny_force_push_protected"
+
+
+# --- Fix round 2, item 1 (Important): quoted-separator bypass -------------
+
+
+@pytest.mark.parametrize("command", ['X="|" rm -rf /', "A='|' rm -rf /"])
+def test_quoted_separator_does_not_hide_a_dangerous_rm(
+    default_policy: policy_mod.Policy, command: str
+) -> None:
+    decision = rules.decide("Bash", _bash(command), default_policy, CWD)
+    assert decision.decision == "deny"
+    assert decision.rule_id == "deny_rm_root"
+
+
+@pytest.mark.parametrize("command", ['echo "a|b"', 'grep "x;y" f'])
+def test_quoted_separators_in_benign_commands_stay_allowed(
+    default_policy: policy_mod.Policy, command: str
+) -> None:
+    decision = rules.decide("Bash", _bash(command), default_policy, CWD)
+    assert decision.decision is None
+
+
+# --- Fix round 2, item 2 (Minor): bare glob resolved against cwd ----------
+
+
+def test_bare_star_glob_is_not_denied_outside_root_or_repo(
+    default_policy: policy_mod.Policy,
+) -> None:
+    decision = rules.decide("Bash", _bash("rm -rf *"), default_policy, "/tmp/verdict-rules-x")
+    assert decision.decision is None
+
+
+def test_bare_star_glob_at_repo_root_is_denied(
+    default_policy: policy_mod.Policy, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    decision = rules.decide("Bash", _bash("rm -rf *"), default_policy, str(repo))
+    assert decision.decision == "deny"
+    assert decision.rule_id == "deny_rm_root"
+
+
+# --- Fix round 2, item 3 (Minor): realpath the rm target too --------------
+
+
+def test_rm_through_a_symlink_to_the_repo_root_is_denied(
+    default_policy: policy_mod.Policy, tmp_path: Path
+) -> None:
+    real_repo = tmp_path / "real_repo"
+    real_repo.mkdir()
+    (real_repo / ".git").mkdir()
+    link = tmp_path / "link_to_repo"
+    link.symlink_to(real_repo)
+
+    decision = rules.decide("Bash", _bash(f"rm -rf {link}"), default_policy, str(real_repo))
+    assert decision.decision == "deny"
+    assert decision.rule_id == "deny_rm_root"
+
+
+# --- Fix round 2, item 4 (Minor): the `env` wrapper -----------------------
+
+
+@pytest.mark.parametrize("command", ["env rm -rf /", "env FOO=1 rm -rf /", "sudo rm -rf /"])
+def test_env_and_sudo_wrappers_do_not_hide_a_dangerous_rm(
+    default_policy: policy_mod.Policy, command: str
+) -> None:
+    decision = rules.decide("Bash", _bash(command), default_policy, CWD)
+    assert decision.decision == "deny"
+    assert decision.rule_id == "deny_rm_root"

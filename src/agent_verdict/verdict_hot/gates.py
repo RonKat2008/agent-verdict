@@ -53,6 +53,9 @@ _VAR_ASSIGN_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|\"[^\"]*\"|\
 # strips. Once a wrapper is stripped, the runner underneath is matched by
 # its own bare pattern (e.g. "npx playwright test" -> "playwright test"),
 # so wrappers don't need one runner_pattern per wrapper+runner combination.
+# "env" (task-5 fix round 2 item 4): rules.py's `_parse_rm_segment` reuses
+# this same table via `_strip_leading` so `env rm -rf /` is not missed;
+# `is_check` picks up the same stripping for `env pytest -q` for free.
 _WRAPPERS = (
     "uv run",
     "npx",
@@ -69,6 +72,7 @@ _WRAPPERS = (
     "python3 -m",
     "time",
     "sudo",
+    "env",
 )
 
 
