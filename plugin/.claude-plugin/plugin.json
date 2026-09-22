@@ -10,9 +10,22 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "shadow records everything and never blocks or nudges; enforce may block on strong evidence (not available until a later version); off disables recording entirely.",
+      "description": "shadow records everything and never blocks or nudges; enforce may block on strong evidence; off disables recording entirely.",
       "options": ["shadow", "enforce", "off"],
       "default": "shadow"
+    },
+    "provider": {
+      "type": "string",
+      "title": "Provider",
+      "description": "Which System One preset verifies a Stop's completion claims. local-only never calls a provider and only records evidence.",
+      "options": ["openrouter", "typesafe", "local-only"],
+      "default": "openrouter"
+    },
+    "api_key": {
+      "type": "string",
+      "title": "API key",
+      "description": "API key for the selected provider. Falls back to OPENROUTER_API_KEY or TYPESAFE_API_KEY when unset. Never logged or written to the ledger.",
+      "sensitive": true
     }
   }
 }

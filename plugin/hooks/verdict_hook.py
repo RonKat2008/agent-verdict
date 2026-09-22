@@ -25,12 +25,29 @@ retry." `recorders.record` is a single call with no internal checkpoint to
 abort from, so the compliant behavior here is exactly that simplest form:
 `total_ms` is measured end to end and always logged; nothing is skipped
 mid-flight and nothing ever sleeps or retries.
+
+M2 (task-4-brief.md): after `recorders.record`, a payload whose own
+`hook_event_name` is `"Stop"` or `"SubagentStop"` is also routed to
+`stop.handle`, which enforces the 2.5s provider budget measured from
+`start` (the same `time.monotonic()` value `main` already captures, passed
+through so the budget is spent from hook entry, not from `stop.handle`
+entry). Routing is decided from the PAYLOAD's own `hook_event_name`, the
+same field `parsers.parse_event`/`recorders.record` already dispatch on,
+not from `argv` -- `argv` remains only a cosmetic label for `hook.log`
+(hooks.json's `args` always agrees with it in a real invocation, but
+nothing here depends on that agreement). `stop.handle` never raises
+(module docstring); when it returns a non-`None` `stdout_json` it is
+printed verbatim, still followed by exit 0 in every case.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _MAX_STDIN_BYTES = 5 * 1024 * 1024
 _MODE_OFF = "off"
@@ -54,7 +71,7 @@ def main(argv: list[str]) -> int:
 
     logsafe.install_excepthook()
 
-    session_id, outcome, err_class = _handle()
+    session_id, outcome, err_class = _handle(start)
     total_ms = (time.monotonic() - start) * 1000.0
     logsafe.log_invocation(event, session_id, outcome, total_ms, err_class)
     return 0
@@ -68,7 +85,10 @@ def _log_windows_disabled(argv: list[str]) -> None:
     logsafe.log_invocation(event, None, "disabled", 0.0)
 
 
-def _handle() -> tuple[str | None, str, str | None]:
+_STOP_EVENT_NAMES = ("Stop", "SubagentStop")
+
+
+def _handle(start: float) -> tuple[str | None, str, str | None]:
     """Read stdin, parse JSON, and record one ledger row.
 
     Never raises: every failure is converted into an `(session_id, outcome,
@@ -95,10 +115,40 @@ def _handle() -> tuple[str | None, str, str | None]:
     try:
         outcome = recorders.record(cast(Mapping[str, object], payload))
     except parsers.ParseError:
-        return session_id, "skipped", None
+        outcome = "skipped"
     except Exception as exc:  # noqa: BLE001 - fail-open contract (global-constraints.md)
         return session_id, "exception", type(exc).__name__
+
+    if isinstance(payload, dict) and payload.get("hook_event_name") in _STOP_EVENT_NAMES:
+        outcome = _run_stop(cast(Mapping[str, object], payload), start)
+
     return session_id, outcome, None
+
+
+def _run_stop(payload: Mapping[str, object], start: float) -> str:
+    """Load the effective policy and run the Stop/SubagentStop verifier.
+
+    Stands down before ever reaching `stop.handle` when the effective
+    policy's `mode` is `off` (the same second line of defense
+    `recorders.record` already applies): no row, no provider call, no
+    stdout -- mirroring `test_policy_mode_off_skips_the_row_but_still_logs`.
+    """
+    from verdict_hot import policy as policy_mod
+    from verdict_hot import stop
+
+    try:
+        active_policy = policy_mod.load_policy()
+    except policy_mod.PolicyError:
+        active_policy = policy_mod.load_policy(path=policy_mod._default_policy_path())
+
+    if active_policy.mode.strip().lower() == _MODE_OFF:
+        return "skipped"
+
+    api_key = os.environ.get("CLAUDE_PLUGIN_OPTION_API_KEY")
+    outcome = stop.handle(payload, active_policy, start, api_key)
+    if outcome.stdout_json is not None:
+        sys.stdout.write(outcome.stdout_json)
+    return outcome.outcome
 
 
 def _read_stdin_json(cap: int) -> object:

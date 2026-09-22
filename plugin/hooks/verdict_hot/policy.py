@@ -104,16 +104,45 @@ class SpanPolicy(NamedTuple):
 
 
 class Thresholds(NamedTuple):
-    """Score thresholds shared across span/verdict logic.
-
-    Only `t_ack_hi` is needed by Task 1 (D-020: a stop's `acks_failures`
-    score at or above this acknowledges a listed failure). Task 4 adds more
-    thresholds (e.g. for R1-R4 policy rules) to this same section, so the
-    shape stays extensible: a user override may set any subset of fields
-    once Task 4 lands, exactly like every other policy section.
-    """
+    """Score thresholds for span/verdict logic. `t_ack_hi` (D-020): a
+    stop's `acks_failures` at or above this acknowledges a listed failure.
+    `t_done`/`t_ack`/`t_check`/`t_soft`/`t_claim` (task-4-brief.md, PLAN
+    5.3) feed the R1-R4 rules in `verdict_policy.py`."""
 
     t_ack_hi: float
+    t_done: float
+    t_ack: float
+    t_check: float
+    t_soft: float
+    t_claim: float
+
+
+class StopPolicy(NamedTuple):
+    """Stop/SubagentStop knobs (task-4-brief.md, PLAN 5.4).
+    `max_blocks_per_prompt` is the guard's limit; `ceiling` is the hard cap
+    a user override can never exceed (`min(max_blocks_per_prompt,
+    ceiling)`). `always_verify` forces a call despite no G-STOP evidence.
+    `subagent_block` gates whether a SubagentStop verdict may actually
+    block; false records `would_have` only."""
+
+    max_blocks_per_prompt: int
+    ceiling: int
+    always_verify: bool
+    subagent_block: bool
+
+
+class ProviderPolicy(NamedTuple):
+    """Provider selection/timing (task-4-brief.md, D-011, D-012). `default`
+    is the preset used absent `CLAUDE_PLUGIN_OPTION_PROVIDER`/an override.
+    `deadline_s` bounds one call; `budget_s` bounds the whole Stop hook's
+    provider work; `retry_min_remaining_s` is the minimum left to retry;
+    `breaker_open_s` is the breaker's open duration after three 429s."""
+
+    default: str
+    deadline_s: float
+    budget_s: float
+    retry_min_remaining_s: float
+    breaker_open_s: int
 
 
 class StatePolicy(NamedTuple):
@@ -147,6 +176,8 @@ class Policy(NamedTuple):
     span: SpanPolicy
     thresholds: Thresholds
     state: StatePolicy
+    stop: StopPolicy
+    provider: ProviderPolicy
 
 
 _REQUIRED_TOP_KEYS = (
@@ -160,6 +191,8 @@ _REQUIRED_TOP_KEYS = (
     "span",
     "thresholds",
     "state",
+    "stop",
+    "provider",
 )
 
 
@@ -285,7 +318,33 @@ def _build_span(raw: Mapping[str, Any]) -> SpanPolicy:
 
 
 def _build_thresholds(raw: Mapping[str, Any]) -> Thresholds:
-    return Thresholds(t_ack_hi=float(_require(raw, "t_ack_hi", "thresholds")))
+    return Thresholds(
+        t_ack_hi=float(_require(raw, "t_ack_hi", "thresholds")),
+        t_done=float(_require(raw, "t_done", "thresholds")),
+        t_ack=float(_require(raw, "t_ack", "thresholds")),
+        t_check=float(_require(raw, "t_check", "thresholds")),
+        t_soft=float(_require(raw, "t_soft", "thresholds")),
+        t_claim=float(_require(raw, "t_claim", "thresholds")),
+    )
+
+
+def _build_stop(raw: Mapping[str, Any]) -> StopPolicy:
+    return StopPolicy(
+        max_blocks_per_prompt=int(_require(raw, "max_blocks_per_prompt", "stop")),
+        ceiling=int(_require(raw, "ceiling", "stop")),
+        always_verify=bool(_require(raw, "always_verify", "stop")),
+        subagent_block=bool(_require(raw, "subagent_block", "stop")),
+    )
+
+
+def _build_provider(raw: Mapping[str, Any]) -> ProviderPolicy:
+    return ProviderPolicy(
+        default=str(_require(raw, "default", "provider")),
+        deadline_s=float(_require(raw, "deadline_s", "provider")),
+        budget_s=float(_require(raw, "budget_s", "provider")),
+        retry_min_remaining_s=float(_require(raw, "retry_min_remaining_s", "provider")),
+        breaker_open_s=int(_require(raw, "breaker_open_s", "provider")),
+    )
 
 
 def _build_state(raw: Mapping[str, Any]) -> StatePolicy:
@@ -311,6 +370,8 @@ def _build_policy(raw: Mapping[str, Any]) -> Policy:
         span = _build_span(raw["span"])
         thresholds = _build_thresholds(raw["thresholds"])
         state = _build_state(raw["state"])
+        stop = _build_stop(raw["stop"])
+        provider = _build_provider(raw["provider"])
     except (TypeError, ValueError, KeyError) as exc:
         raise PolicyError(f"malformed policy field: {exc}") from exc
 
@@ -325,4 +386,6 @@ def _build_policy(raw: Mapping[str, Any]) -> Policy:
         span=span,
         thresholds=thresholds,
         state=state,
+        stop=stop,
+        provider=provider,
     )

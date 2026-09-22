@@ -27,9 +27,13 @@ M1_FIXTURES = [
     ("user_prompt_submit", "prompt"),
     ("post_tool_use_bash", "post"),
     ("post_tool_use_failure_bash", "post_fail"),
-    ("stop", "stop"),
     ("session_end", "session_end"),
 ]
+# "stop" is exercised separately (test_stop_fixture_also_runs_the_m2_verifier):
+# since M2, a Stop payload is also routed to stop.handle, which appends a
+# second `action` row and (with no prior evidence) changes hook.log's
+# recorded outcome from "ok" to a real Stop outcome ("pass" here) -- see
+# tests/integration/test_stop_hook.py for the provider-calling paths.
 SYSTEM_PYTHON = "/usr/bin/python3"
 INTERPRETERS = [None] + ([SYSTEM_PYTHON] if os.path.exists(SYSTEM_PYTHON) else [])
 SENTINEL_KEY = (
@@ -80,6 +84,27 @@ def test_each_fixture_writes_exactly_one_valid_row(
     assert [entry["outcome"] for entry in _log(tmp_path)] == ["ok"]
 
 
+def test_stop_fixture_also_runs_the_m2_verifier(tmp_path: Path) -> None:
+    """The `stop.json` fixture has no prior evidence (no post/post_fail rows
+    for its prompt_id), so the G-STOP gate skips the provider entirely: one
+    `stop` recorder row plus one `action` row (`action="pass"`,
+    `gate_reason="no_evidence"`), and hook.log's outcome is the verifier's
+    own outcome, not the recorder's "ok" (task-4-brief.md)."""
+    data = (FIXTURES / "stop.json").read_bytes()
+
+    proc = _run(tmp_path, data)
+
+    assert proc.returncode == 0
+    assert proc.stdout == b""
+    rows = _rows(tmp_path)
+    assert [r["event"] for r in rows] == ["stop", "action"]
+    for row in rows:
+        validate_row(row)
+    assert rows[1]["action"] == "pass"
+    assert rows[1]["gate_reason"] == "no_evidence"
+    assert [entry["outcome"] for entry in _log(tmp_path)] == ["pass"]
+
+
 def test_pre_tool_use_is_skipped_without_a_row(tmp_path: Path) -> None:
     proc = _run(tmp_path, (FIXTURES / "pre_tool_use_bash.json").read_bytes())
     assert proc.returncode == 0 and proc.stdout == b""
@@ -118,9 +143,9 @@ def test_sentinel_key_never_reaches_ledger_or_log(tmp_path: Path) -> None:
 def test_stale_interpreter_file_falls_through_to_python3(tmp_path: Path) -> None:
     tmp_path.mkdir(exist_ok=True)
     (tmp_path / "interpreter").write_text("/nonexistent/python3\n")
-    proc = _run(tmp_path, (FIXTURES / "stop.json").read_bytes())
+    proc = _run(tmp_path, (FIXTURES / "session_end.json").read_bytes())
     assert proc.returncode == 0 and proc.stdout == b""
-    assert [r["event"] for r in _rows(tmp_path)] == ["stop"]
+    assert [r["event"] for r in _rows(tmp_path)] == ["session_end"]
 
 
 def test_interpreter_file_is_honored_when_valid(tmp_path: Path) -> None:
@@ -128,7 +153,7 @@ def test_interpreter_file_is_honored_when_valid(tmp_path: Path) -> None:
     assert python
     tmp_path.mkdir(exist_ok=True)
     (tmp_path / "interpreter").write_text(python + "\n")
-    proc = _run(tmp_path, (FIXTURES / "stop.json").read_bytes())
+    proc = _run(tmp_path, (FIXTURES / "session_end.json").read_bytes())
     assert proc.returncode == 0 and len(_rows(tmp_path)) == 1
 
 
@@ -190,14 +215,14 @@ def test_interpreter_file_tolerates_trailing_whitespace_and_crlf(tmp_path: Path)
     assert python
     tmp_path.mkdir(exist_ok=True)
     (tmp_path / "interpreter").write_bytes(f"  {python}  \r\n".encode())
-    proc = _run(tmp_path, (FIXTURES / "stop.json").read_bytes())
+    proc = _run(tmp_path, (FIXTURES / "session_end.json").read_bytes())
     assert proc.returncode == 0 and len(_rows(tmp_path)) == 1
 
 
 def test_relative_interpreter_path_is_ignored(tmp_path: Path) -> None:
     tmp_path.mkdir(exist_ok=True)
     (tmp_path / "interpreter").write_text("bin/python3\n")
-    proc = _run(tmp_path, (FIXTURES / "stop.json").read_bytes())
+    proc = _run(tmp_path, (FIXTURES / "session_end.json").read_bytes())
     assert proc.returncode == 0 and len(_rows(tmp_path)) == 1  # fell through to PATH python3
 
 
@@ -222,7 +247,7 @@ def test_mode_shadow_and_enforce_still_record(tmp_path: Path, value: str) -> Non
         tmp_path, (FIXTURES / "stop.json").read_bytes(), extra={"CLAUDE_PLUGIN_OPTION_MODE": value}
     )
     assert proc.returncode == 0 and proc.stdout == b""
-    assert [r["event"] for r in _rows(tmp_path)] == ["stop"]
+    assert [r["event"] for r in _rows(tmp_path)] == ["stop", "action"]
 
 
 def test_policy_mode_off_skips_the_row_but_still_logs(tmp_path: Path) -> None:

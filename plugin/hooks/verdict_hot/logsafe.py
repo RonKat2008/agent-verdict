@@ -41,7 +41,21 @@ _ENV_SECRET_EXACT_NAMES = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "ANTHROPIC_
 _MIN_ENV_SECRET_LEN = 8
 _MAX_LOG_BYTES = 10 * 1024 * 1024
 _FILE_MODE = 0o600
-_VALID_OUTCOMES = frozenset({"ok", "skipped", "exception", "disabled"})
+_VALID_OUTCOMES = frozenset(
+    {
+        "ok",
+        "skipped",
+        "exception",
+        "disabled",
+        # task-4-brief.md: verdict_hook._run_stop passes stop.handle's own
+        # outcome straight through as the logged outcome for a Stop/
+        # SubagentStop invocation, in place of the recorder's "ok".
+        "pass",
+        "block",
+        "flag",
+        "gate_unavailable",
+    }
+)
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 # Test-only escape hatch: multiprocess rotation tests need to shrink the

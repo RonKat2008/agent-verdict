@@ -9,7 +9,16 @@
     "schema_v": { "const": 1 },
     "ts": { "type": "number" },
     "event": {
-      "enum": ["session_start", "prompt", "post", "post_fail", "stop", "session_end"]
+      "enum": [
+        "session_start",
+        "prompt",
+        "post",
+        "post_fail",
+        "stop",
+        "session_end",
+        "verdict",
+        "action"
+      ]
     },
     "session_id": { "type": "string" },
     "prompt_id": { "type": ["string", "null"] },
@@ -117,6 +126,51 @@
         "required": ["reason"],
         "properties": {
           "reason": { "type": "string" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "verdict" } } },
+      "then": {
+        "required": [
+          "question_key",
+          "question_type",
+          "answer",
+          "provider",
+          "model_returned",
+          "input_tokens",
+          "conn_ms",
+          "infer_ms",
+          "policy_version"
+        ],
+        "properties": {
+          "question_key": { "type": "string" },
+          "question_type": { "enum": ["noul", "score", "choice"] },
+          "answer": { "type": "object" },
+          "provider": { "type": "string" },
+          "model_returned": { "type": ["string", "null"] },
+          "input_tokens": { "type": ["integer", "null"] },
+          "conn_ms": { "type": "number" },
+          "infer_ms": { "type": "number" },
+          "policy_version": { "type": "string" },
+          "listed_failures": { "type": "array" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "action" } } },
+      "then": {
+        "required": ["action", "mode", "hook_ms", "open_failures"],
+        "properties": {
+          "action": { "enum": ["pass", "flag", "block", "gate_unavailable"] },
+          "would_have": { "type": ["string", "null"] },
+          "rule_id": { "type": ["string", "null"] },
+          "threshold_used": { "type": ["number", "null"] },
+          "mode": { "type": "string" },
+          "reason_hash": { "type": ["string", "null"] },
+          "gate_reason": { "type": ["string", "null"] },
+          "hook_ms": { "type": "number" },
+          "open_failures": { "type": "array" }
         }
       }
     }

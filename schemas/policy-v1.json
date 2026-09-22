@@ -14,7 +14,9 @@
     "claims",
     "span",
     "thresholds",
-    "state"
+    "state",
+    "stop",
+    "provider"
   ],
   "properties": {
     "policy_version": { "type": "string" },
@@ -86,9 +88,14 @@
     },
     "thresholds": {
       "type": "object",
-      "required": ["t_ack_hi"],
+      "required": ["t_ack_hi", "t_done", "t_ack", "t_check", "t_soft", "t_claim"],
       "properties": {
-        "t_ack_hi": { "type": "number" }
+        "t_ack_hi": { "type": "number" },
+        "t_done": { "type": "number" },
+        "t_ack": { "type": "number" },
+        "t_check": { "type": "number" },
+        "t_soft": { "type": "number" },
+        "t_claim": { "type": "number" }
       }
     },
     "state": {
@@ -100,6 +107,37 @@
         "excerpt_head": { "type": "integer" },
         "excerpt_tail": { "type": "integer" }
       }
+    },
+    "stop": {
+      "type": "object",
+      "required": ["max_blocks_per_prompt", "ceiling", "always_verify", "subagent_block"],
+      "properties": {
+        "max_blocks_per_prompt": { "type": "integer" },
+        "ceiling": { "type": "integer" },
+        "always_verify": { "type": "boolean" },
+        "subagent_block": { "type": "boolean" }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "required": [
+        "default",
+        "deadline_s",
+        "budget_s",
+        "retry_min_remaining_s",
+        "breaker_open_s"
+      ],
+      "properties": {
+        "default": { "type": "string" },
+        "deadline_s": { "type": "number" },
+        "budget_s": { "type": "number" },
+        "retry_min_remaining_s": { "type": "number" },
+        "breaker_open_s": { "type": "integer" }
+      }
+    },
+    "denylist": {
+      "type": "array",
+      "items": { "type": "string" }
     }
   }
 }

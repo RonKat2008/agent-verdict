@@ -114,7 +114,7 @@ def test_parses_session_end_fixture() -> None:
     assert event.common.prompt_id == "9ec829d2-3162-444c-8179-b417ac801235"
 
 
-# --- PreToolUse / SubagentStop rejected in M1 ------------------------------
+# --- PreToolUse rejected; SubagentStop parses like Stop (task-4-brief.md) --
 
 
 def test_pre_tool_use_raises_parse_error() -> None:
@@ -123,10 +123,18 @@ def test_pre_tool_use_raises_parse_error() -> None:
     assert excinfo.value.field == "hook_event_name"
 
 
-def test_subagent_stop_raises_parse_error() -> None:
-    with pytest.raises(parsers.ParseError) as excinfo:
-        parsers.parse_event(_load("subagent_stop.json"))
-    assert excinfo.value.field == "hook_event_name"
+def test_subagent_stop_parses_like_stop() -> None:
+    """task-4-brief.md, controller notes ruling 12: SubagentStop carries the
+    same stop_hook_active/last_assistant_message/background_tasks shape
+    (G7) as Stop, so it reuses the same StopEvent parser; agent_id/
+    agent_type are carried by Common already."""
+    event = parsers.parse_event(_load("subagent_stop.json"))
+
+    assert isinstance(event, parsers.StopEvent)
+    assert event.common.agent_id == "a6ff92b84da5e1deb"
+    assert event.common.agent_type == "general-purpose"
+    assert event.stop_hook_active is False
+    assert "sub" in event.last_assistant_message
 
 
 def test_unknown_hook_event_name_raises_parse_error() -> None:

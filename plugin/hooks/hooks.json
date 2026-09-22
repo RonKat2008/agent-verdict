@@ -57,7 +57,20 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh",
             "args": ["stop"],
-            "timeout": 5
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh",
+            "args": ["subagent-stop"],
+            "timeout": 15
           }
         ]
       }

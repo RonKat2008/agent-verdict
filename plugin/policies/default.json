@@ -163,12 +163,42 @@
     "max_prompts": 5
   },
   "thresholds": {
-    "t_ack_hi": 0.7
+    "t_ack_hi": 0.7,
+    "t_done": 0.7,
+    "t_ack": 0.3,
+    "t_check": 0.7,
+    "t_soft": 0.8,
+    "t_claim": 0.25
   },
   "state": {
     "target_tokens": 4000,
     "max_tokens": 16000,
     "excerpt_head": 200,
     "excerpt_tail": 600
-  }
+  },
+  "stop": {
+    "max_blocks_per_prompt": 1,
+    "ceiling": 2,
+    "always_verify": false,
+    "subagent_block": false
+  },
+  "provider": {
+    "default": "openrouter",
+    "deadline_s": 1.8,
+    "budget_s": 2.5,
+    "retry_min_remaining_s": 1.2,
+    "breaker_open_s": 600
+  },
+  "denylist": [
+    "\\brm\\s+(-[a-zA-Z]*[rf][a-zA-Z]*\\s+)+(/|~|\\$HOME)\\s*$",
+    "\\bgit\\s+push\\s+(--force|-f)\\b[^\\n]*\\b(main|master|prod|production|release)\\b",
+    "\\bgit\\s+clean\\s+(-[a-zA-Z]*[fdx]){2,}\\b",
+    "\\bdd\\b[^\\n]*\\bof=/dev/",
+    "\\bmkfs(\\.\\w+)?\\b",
+    "\\bchmod\\s+-R\\s+777\\s+/\\s*$",
+    "\\bcurl\\b[^\\n]*\\|\\s*(sudo\\s+)?(sh|bash|zsh)\\b",
+    "\\bwget\\b[^\\n]*\\|\\s*(sudo\\s+)?(sh|bash|zsh)\\b",
+    "\\bDROP\\s+DATABASE\\b",
+    "\\bTRUNCATE\\s+TABLE\\b"
+  ]
 }

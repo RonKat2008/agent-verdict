@@ -15,10 +15,15 @@ were never observed on any captured fixture (G14) and M1's event interfaces
 below do not carry them -- `cc_effort` is therefore always written as `null`
 by `recorders.build_row` for M1's `session_start` rows.
 
-`PreToolUse` and `SubagentStop` are out of scope for M1 (the controller's
-recorders never register those two hook names); `parse_event` raises
-`ParseError("hook_event_name")` for them so the M2 work can add real parsing
-later without this module lying about what it currently supports.
+`PreToolUse` is out of scope for M2 Task 4 (`rules.py`'s PreToolUse gate is
+a later task); `parse_event` raises `ParseError("hook_event_name")` for it.
+
+`SubagentStop` (task-4-brief.md, controller notes ruling 12) parses
+identically to `Stop` -- G7's captured fixture shows the same
+`stop_hook_active`/`last_assistant_message`/`background_tasks` shape, with
+`agent_id`/`agent_type` carried by `Common` already. `recorders.py` records
+it as the same `"stop"` ledger event; `stop.py` tells the two apart by
+`hook_event_name` on the raw payload, not by a different parsed type.
 """
 
 from __future__ import annotations
@@ -229,6 +234,7 @@ _DISPATCH: dict[str, Callable[[Mapping[str, object]], HookEvent]] = {
     "PostToolUse": _parse_post,
     "PostToolUseFailure": _parse_post_fail,
     "Stop": _parse_stop,
+    "SubagentStop": _parse_stop,
     "SessionEnd": _parse_session_end,
 }
 
