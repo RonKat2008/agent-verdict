@@ -14,7 +14,6 @@ interleave or clobber `hook.log.1`.
 
 from __future__ import annotations
 
-import contextlib
 import fcntl
 import json
 import os
@@ -23,9 +22,18 @@ import sys
 import time
 import types
 from collections.abc import Mapping
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import SCHEMA_V, paths
+
+if TYPE_CHECKING:
+    # `Path` is only ever used here as a type annotation (every real Path
+    # object passed in is already built by `paths.py`, which needs `pathlib`
+    # for real) -- guarding the import keeps `pathlib` out of *this*
+    # module's own top-level import cost. `from __future__ import
+    # annotations` already makes every annotation below a lazy string, so
+    # this guard changes nothing at runtime (task-6-brief.md item 3).
+    from pathlib import Path
 
 _REDACTED = "<redacted>"
 _ENV_SECRET_PREFIX = "CLAUDE_PLUGIN_OPTION_"
@@ -107,8 +115,10 @@ def _dedupe_key(existing: dict[str, object], key: str) -> str:
 def _max_log_bytes() -> int:
     override = os.environ.get(_TEST_MAX_LOG_BYTES_ENV)
     if override:
-        with contextlib.suppress(ValueError):
+        try:
             return int(override)
+        except ValueError:
+            pass
     return _MAX_LOG_BYTES
 
 
@@ -120,8 +130,10 @@ def log_invocation(
     err_class: str | None = None,
     extra: Mapping[str, object] | None = None,
 ) -> None:
-    with contextlib.suppress(Exception):
+    try:  # noqa: SIM105 - contextlib.suppress costs an import (task-6-brief.md item 3)
         _log_invocation_unsafe(event, session_id, outcome, total_ms, err_class, extra)
+    except Exception:  # noqa: BLE001 - fail-open contract (global-constraints.md)
+        pass
 
 
 def _log_invocation_unsafe(

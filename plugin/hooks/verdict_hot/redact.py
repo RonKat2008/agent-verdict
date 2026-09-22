@@ -38,7 +38,6 @@ unexpected internal exception makes `redact_detail` return
 
 from __future__ import annotations
 
-import math
 import os
 import re
 from collections import Counter
@@ -86,6 +85,14 @@ def _allowlist_patterns() -> list[re.Pattern[str]]:
 def _shannon_entropy(value: str) -> float:
     if not value:
         return 0.0
+    # `math` is imported here rather than at module level (task-6-brief.md
+    # item 4): most invocations of `redact()` scan text with no rule whose
+    # keyword prefilter matches at all, so `_shannon_entropy` (and the only
+    # thing in this module that needs `math`) never runs -- importing it
+    # eagerly would cost every call to `redact()`, not just the ones that
+    # reach an entropy check.
+    import math
+
     length = len(value)
     counts = Counter(value)
     return -sum((n / length) * math.log2(n / length) for n in counts.values())

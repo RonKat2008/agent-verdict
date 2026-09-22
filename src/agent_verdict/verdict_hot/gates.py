@@ -15,6 +15,20 @@ Every policy-supplied pattern list (globs and regexes alike) is compiled
 lazily and cached by `functools.cache`, keyed on the pattern tuple itself
 (tuples are hashable) -- never at import (task-3-brief.md: "no regex
 compilation at import; compile lazily and cache").
+
+Task 6 (perf): every caller here only ever needs a boolean "did any pattern
+in this list match" -- none attributes a hit back to a specific pattern (a
+Bash command either is or is not a never-send trigger; a segment either is
+or is not a check-runner). So each policy-supplied list is joined into ONE
+alternation and compiled once, instead of once per pattern: on the
+`post-fail` fixture this cut ~60 of the ~80 `re.compile` calls per process
+down to 2. A pattern's own leading global inline flag (`(?i)`, `(?m)`, ...)
+is rewritten to a *scoped* group flag (`(?i:...)`) so joining never changes
+that one pattern's case-sensitivity or MULTILINE behavior, or leaks it onto
+the other alternatives. `claims.py`'s success-verb patterns are the
+exception: `_asserts_success` needs each verb's own match position for its
+negation lookback, so those stay individually compiled (attribution is
+required there).
 """
 
 from __future__ import annotations
@@ -58,20 +72,55 @@ _WRAPPERS = (
 )
 
 
-@cache
-def _compiled(patterns: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
-    compiled = []
-    for pattern in patterns:
-        try:
-            compiled.append(re.compile(pattern))
-        except re.error:
-            continue  # a malformed user-supplied pattern never crashes the hot path
-    return tuple(compiled)
+_GLOBAL_FLAGS_RE = re.compile(r"^\(\?([aiLmsux]+)\)")
+
+
+def _scope_pattern(pattern: str) -> str:
+    """Wrap `pattern` as one alternation branch, `(?:pattern)`.
+
+    A pattern that opens with a global inline-flag group (`(?i)`, `(?m)`,
+    ...) is rewritten to the scoped form (`(?i:pattern-body)`) instead, so
+    the flag keeps applying to only that one branch once several patterns
+    are joined with `|` -- a global `(?i)` anywhere in a joined pattern
+    would otherwise make every OTHER branch case-insensitive too.
+    """
+    match = _GLOBAL_FLAGS_RE.match(pattern)
+    if match:
+        return f"(?{match.group(1)}:{pattern[match.end() :]})"
+    return f"(?:{pattern})"
 
 
 @cache
-def _glob_regexes(globs: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
-    return tuple(re.compile(_glob_to_regex(_expand_home(g))) for g in globs)
+def _compiled(patterns: tuple[str, ...]) -> re.Pattern[str] | None:
+    """Join `patterns` into one alternation and compile it once.
+
+    Falls back to compiling one-by-one and dropping any single malformed
+    pattern (same fail-open contract as before this task) only on the rare
+    path where the joined pattern itself fails to compile -- a malformed
+    user-supplied pattern must never crash the hot path, and must never
+    poison every other pattern in the same list either.
+    """
+    if not patterns:
+        return None
+    try:
+        return re.compile("|".join(_scope_pattern(p) for p in patterns))
+    except re.error:
+        valid = []
+        for pattern in patterns:
+            try:
+                re.compile(pattern)
+            except re.error:
+                continue
+            valid.append(pattern)
+        return re.compile("|".join(_scope_pattern(p) for p in valid)) if valid else None
+
+
+@cache
+def _glob_regexes(globs: tuple[str, ...]) -> re.Pattern[str] | None:
+    if not globs:
+        return None
+    parts = (_glob_to_regex(_expand_home(g)) for g in globs)
+    return re.compile("|".join(f"(?:{p})" for p in parts))
 
 
 def _expand_home(pattern: str) -> str:
@@ -110,11 +159,13 @@ def _glob_to_regex(pattern: str) -> str:
 
 
 def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
-    return any(regex.search(text) for regex in _compiled(patterns))
+    compiled = _compiled(patterns)
+    return compiled is not None and compiled.search(text) is not None
 
 
 def _matches_any_glob(candidate: str, globs: tuple[str, ...]) -> bool:
-    return any(regex.match(candidate) for regex in _glob_regexes(globs))
+    compiled = _glob_regexes(globs)
+    return compiled is not None and compiled.match(candidate) is not None
 
 
 def is_never_send(tool_name: str, tool_input: Mapping[str, object], policy: Policy) -> bool:
@@ -169,9 +220,11 @@ def is_check(command: str, policy: Policy) -> bool:
     """
     runners = policy.checks.runner_patterns + policy.checks.extra
     compiled = _compiled(runners)
+    if compiled is None:
+        return False
     for raw_segment in _SEGMENT_SPLIT_RE.split(command):
         candidate = _strip_leading(raw_segment)
-        if any(regex.match(candidate) for regex in compiled):
+        if compiled.match(candidate):
             return True
     return False
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -464,3 +465,51 @@ def test_build_row_purity_holds_for_write_event(default_policy: Policy) -> None:
 
     assert dict(event.tool_input) == tool_input_before
     assert event.tool_response == tool_response_before
+
+
+def test_cwd_hash_is_sixteen_lowercase_hex_chars() -> None:
+    """task-6-brief.md item 2: FNV-1a 64-bit, formatted as 16 hex chars --
+    same shape as the earlier sha256-hexdigest[:16] it replaces, so the
+    ledger schema's `cwd_hash: {"type": "string"}` still holds."""
+    digest = recorders._cwd_hash("/private/var/tmp/example")
+    assert len(digest) == 16
+    assert all(c in "0123456789abcdef" for c in digest)
+
+
+def test_cwd_hash_is_deterministic() -> None:
+    assert recorders._cwd_hash("/repo/checkout") == recorders._cwd_hash("/repo/checkout")
+
+
+def test_cwd_hash_differs_for_different_cwds() -> None:
+    assert recorders._cwd_hash("/repo/checkout-a") != recorders._cwd_hash("/repo/checkout-b")
+
+
+def test_cwd_hash_matches_known_fnv1a_64_vector() -> None:
+    """Pins the exact algorithm (FNV-1a 64-bit, offset basis
+    0xcbf29ce484222325, prime 0x100000001b3) against the well-known "empty
+    string" and "a" test vectors, so a future edit can't silently swap in a
+    different hash while still satisfying the shape-only tests above."""
+    assert recorders._fnv1a_64(b"") == 0xCBF29CE484222325
+    assert recorders._fnv1a_64(b"a") == 0xAF63DC4C8601EC8C
+
+
+def test_cwd_hash_never_imports_hashlib() -> None:
+    """task-6-brief.md item 2: `_cwd_hash` must not pull in the `_hashlib` C
+    extension (measured ~14ms of per-process startup cost) -- run in a
+    subprocess so it can check `sys.modules` cleanly, independent of
+    whatever earlier tests in this session may have imported."""
+    script = (
+        "import sys; sys.path.insert(0, 'plugin/hooks'); "
+        "from verdict_hot import recorders; "
+        "recorders._cwd_hash('/some/path'); "
+        "assert 'hashlib' not in sys.modules, sorted(sys.modules); "
+        "print('ok')"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "ok"

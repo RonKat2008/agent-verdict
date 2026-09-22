@@ -39,7 +39,6 @@ for the full per-tool field allowlists.
 
 from __future__ import annotations
 
-import hashlib
 import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
@@ -76,8 +75,31 @@ _EVENT_NAMES: dict[type, str] = {
 }
 
 
+# FNV-1a 64-bit (task-6-brief.md item 2): `cwd_hash` only needs a cheap,
+# deterministic, non-reversible-enough identifier for grouping rows by
+# working directory -- it is not a security boundary, so a cryptographic
+# hash is unnecessary cost. `hashlib` alone pulls in the `_hashlib` C
+# extension (measured ~14ms of the per-process startup budget on the
+# `post-fail` fixture -X importtime profile) for every event, since
+# `_cwd_hash` runs on every row via `_common_fields`. FNV-1a is a plain
+# stdlib-free integer loop: no import at all, let alone a C-extension one.
+# This changes stored `cwd_hash` values from M1's earlier sha256-based ones
+# (acceptable per global-constraints.md: no external consumers yet).
+_FNV64_OFFSET_BASIS = 0xCBF29CE484222325
+_FNV64_PRIME = 0x100000001B3
+_FNV64_MASK = 0xFFFFFFFFFFFFFFFF
+
+
+def _fnv1a_64(data: bytes) -> int:
+    digest = _FNV64_OFFSET_BASIS
+    for byte in data:
+        digest ^= byte
+        digest = (digest * _FNV64_PRIME) & _FNV64_MASK
+    return digest
+
+
 def _cwd_hash(cwd: str) -> str:
-    return hashlib.sha256(cwd.encode("utf-8")).hexdigest()[:16]
+    return f"{_fnv1a_64(cwd.encode('utf-8')):016x}"
 
 
 def _process_excerpt(
