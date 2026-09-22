@@ -39,6 +39,7 @@ coverage-hot:
 
 bench-provider:
 	uv run python scripts/smoke_jev.py --n $(or $(N),30) --provider openrouter --provider typesafe --json
+	uv run python scripts/bench_stop_live.py --n $(or $(N),30)
 
 bench-hook:
 	uv run python scripts/bench_hook.py --n $(or $(N),40)

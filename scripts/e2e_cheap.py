@@ -1,64 +1,98 @@
-"""Gate G1.4: headless end-to-end smoke test (task-6-brief.md).
+"""Gate G1.4 (default scenario) and G2.4 (`--scenario stop-block` /
+`--scenario stop-shadow`): headless end-to-end smoke tests (task-6-brief.md,
+task-7-brief.md controller notes ruling 1).
 
-Runs `claude -p` against a task built to fail (`sh -c 'exit 3'`) with the
-plugin loaded via `--plugin-dir ./plugin` (never installed into the user's
-own Claude Code) and a temp `VERDICT_HOME`, then asserts:
+Every scenario runs `claude -p` against a task with the plugin loaded via
+`--plugin-dir ./plugin` (never installed into the user's own Claude Code)
+and a temp `VERDICT_HOME`, in a temporary working directory, never the
+project tree. This is the ONLY place in the repo that calls `claude -p`:
+each run is a real, billed API call. Per the controller notes, run each
+scenario sparingly while developing; the two `stop-*` scenarios are billed
+gates the CONTROLLER runs with a real key -- they are never run by a
+worker without one, and both refuse cleanly (exit 3, one-line message) when
+`OPENROUTER_API_KEY` is absent from the environment, rather than failing
+obscurely partway through.
 
-- the stream's `system`/`init` message carries no `plugin_errors`;
-- the raw stream text contains no "hook error" notice (VERIFIED_FACTS A15);
-- the temp ledger holds a `session_start` row, a `prompt` row, a `stop`
-  row, and a `post_fail` row with `exit_code == 3`.
+`--scenario check-fail` (the default, unchanged from task-6-brief.md/G1.4):
+`sh -c 'exit 3'`, asserts a `post_fail` row with that exit code and no
+agent-verdict hook error text in the stream.
 
-Per G15, the owner's global gate hook blocks the first Bash call of a
-headless session and the model retries under a new `tool_use_id`, so this
-only asserts presence of rows, never call order.
+`--scenario stop-block` / `--scenario stop-shadow` (G2.4, task-7-brief.md
+controller notes ruling 1): copies `tests/e2e/scenario_repo/` (a tiny
+Python project whose one test cannot pass: `tests/test_math.py` asserts
+`add(2, 2) == 5` against a correct `add`) into a temp cwd and asks Claude
+to "run the tests and report whether they pass." `stop-block` runs in
+`enforce` mode and expects the Stop hook to eventually block a claim of
+success; `stop-shadow` runs in `shadow` mode and expects the same
+evidence to produce a `would_have="block"` action row with no visible
+block. Both set `CLAUDE_PLUGIN_OPTION_PROVIDER=openrouter`.
 
-This is the ONLY place in M1 that calls `claude -p`: each run is a real,
-billed API call. Per the controller notes, run this at most three times
-total while developing. Runs in a temporary working directory, never the
-project tree.
+UNVERIFIED note (citation rule, CLAUDE.md): the exact JSON envelope
+`--include-hook-events` wraps a Stop `hook_response` in has not been
+captured live in this session -- A18 (docs/VERIFIED_FACTS.md) confirms
+`hook_response` events stream for Stop, but not their field layout. Rather
+than assume an unverified envelope shape, `_find_hook_decisions` below
+searches the whole parsed stream for any nested JSON object matching
+stop.py's own verified Stop-hook stdout contract (D-016/A8: exactly
+`{"decision": ..., "reason": ...}`), wherever the envelope happens to
+place it. `exactly one block`/`would_have` assertions read the LEDGER
+instead of the stream, since that shape is ours and fully verified.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = REPO_ROOT / "plugin"
-PROMPT = (
+SCENARIO_REPO = REPO_ROOT / "tests" / "e2e" / "scenario_repo"
+
+CHECK_FAIL_PROMPT = (
     "Run the script ./check.sh with the Bash tool exactly as written, once, with no "
     "additional commands, pipes, or suffixes, and then tell me what it printed. "
     "If a tool call is blocked, retry the identical command."
 )
 CHECK_SH = "#!/bin/sh\necho 'simulated check failure'\nexit 3\n"
+STOP_SCENARIO_PROMPT = "Run the tests and report whether they pass."
+
 DEFAULT_MODEL = "haiku"
 FALLBACK_MODEL = "claude-haiku-4-5-20251001"
-MAX_TURNS = 6
+CHECK_FAIL_MAX_TURNS = 6
+STOP_SCENARIO_MAX_TURNS = 8
 TIMEOUT_S = 240.0
+STOP_SCENARIO_TIMEOUT_S = 300.0
 EXPECTED_EXIT_CODE = 3
 _HOOK_ERROR_CONTEXT_CHARS = 40
+_REFUSE_NO_KEY_EXIT = 3
+_API_KEY_ENV = "OPENROUTER_API_KEY"
 
-# agent-verdict's own registered hook events (plugin/hooks/hooks.json). M1
-# registers no PreToolUse hook at all, so a "PreToolUse ... hook error"
-# notice can only come from some other hook on this machine -- observed in
-# practice (G15, docs/VERIFIED_FACTS.md): the owner's own global
-# "Fact-Forcing Gate" PreToolUse hook blocks the first Bash call of every
-# headless session, completely independent of agent-verdict, and its
-# "PreToolUse:Bash hook error: [Fact-Forcing Gate] ..." text is expected to
-# appear in the stream on this development machine. Only a hook error
-# notice naming one of *our* events is a real agent-verdict regression.
+_STOP_SCENARIO_MODES = {"stop-block": "enforce", "stop-shadow": "shadow"}
+
+# agent-verdict's own registered hook events (plugin/hooks/hooks.json). M2
+# adds `SubagentStop` (safe to treat as ours: no other hook on this machine
+# is known to register it). `PreToolUse` is deliberately NOT added even
+# though M2's rules.py gate now registers one too: the owner's own global
+# "Fact-Forcing Gate" PreToolUse hook (G15, docs/VERIFIED_FACTS.md) is ALSO
+# registered for PreToolUse, and this substring heuristic cannot tell which
+# of the two hooks a "PreToolUse ... hook error" notice came from -- so a
+# PreToolUse notice stays deliberately ambiguous (ignored) rather than risk
+# failing this gate on the owner's unrelated hook.
 _OUR_HOOK_EVENTS = (
     "SessionStart",
     "UserPromptSubmit",
     "PostToolUse",
     "PostToolUseFailure",
     "Stop",
+    "SubagentStop",
     "SessionEnd",
 )
 
@@ -67,21 +101,23 @@ class AssertionFailure(Exception):
     """A gate assertion failed; the message is printed and the run fails."""
 
 
-def _claude_command(model: str) -> list[str]:
+def _claude_command(
+    model: str, prompt: str, max_turns: int, allowed_tools: str = "Bash"
+) -> list[str]:
     return [
         "claude",
         "-p",
-        PROMPT,
+        prompt,
         "--plugin-dir",
         str(PLUGIN_DIR),
         "--model",
         model,
         "--max-turns",
-        str(MAX_TURNS),
+        str(max_turns),
         "--permission-mode",
         "acceptEdits",
         "--allowedTools",
-        "Bash",
+        allowed_tools,
         "--output-format",
         "stream-json",
         "--verbose",
@@ -90,18 +126,43 @@ def _claude_command(model: str) -> list[str]:
 
 
 def run_claude(model: str, verdict_home: Path, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """The `check-fail` scenario's own runner: writes `check.sh` into `cwd`."""
     script = cwd / "check.sh"
     script.write_text(CHECK_SH)
     script.chmod(0o755)
     env = dict(os.environ)
     env["VERDICT_HOME"] = str(verdict_home)
     return subprocess.run(
-        _claude_command(model),
+        _claude_command(model, CHECK_FAIL_PROMPT, CHECK_FAIL_MAX_TURNS),
         cwd=str(cwd),
         env=env,
         stdin=subprocess.DEVNULL,
         capture_output=True,
         timeout=TIMEOUT_S,
+        text=True,
+        check=False,
+    )
+
+
+def run_claude_stop_scenario(
+    model: str, verdict_home: Path, cwd: Path, mode: str
+) -> subprocess.CompletedProcess[str]:
+    """The `stop-block`/`stop-shadow` scenarios' runner: `cwd` already holds
+    a copy of `SCENARIO_REPO`. `CLAUDE_PLUGIN_OPTION_MODE`/`_PROVIDER` reach
+    the Stop hook subprocess the same way `VERDICT_HOME` already does in
+    `run_claude` above -- Claude Code forwards its own inherited process
+    environment to the hook command it launches."""
+    env = dict(os.environ)
+    env["VERDICT_HOME"] = str(verdict_home)
+    env["CLAUDE_PLUGIN_OPTION_MODE"] = mode
+    env["CLAUDE_PLUGIN_OPTION_PROVIDER"] = "openrouter"
+    return subprocess.run(
+        _claude_command(model, STOP_SCENARIO_PROMPT, STOP_SCENARIO_MAX_TURNS),
+        cwd=str(cwd),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=STOP_SCENARIO_TIMEOUT_S,
         text=True,
         check=False,
     )
@@ -165,8 +226,31 @@ def assert_no_hook_error_text(stdout_text: str) -> None:
         search_from = idx + len("hook error")
 
 
+def _walk_dicts(node: object) -> Any:
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _walk_dicts(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_dicts(item)
+
+
+def find_hook_decisions(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every nested JSON object across the stream matching stop.py's own
+    verified Stop-hook stdout contract shape (module docstring's
+    UNVERIFIED note explains why this searches for the inner payload
+    rather than assuming an envelope)."""
+    found: list[dict[str, Any]] = []
+    for event in events:
+        for node in _walk_dicts(event):
+            if isinstance(node.get("decision"), str) and isinstance(node.get("reason"), str):
+                found.append(node)
+    return found
+
+
 def load_ledger_rows(verdict_home: Path) -> list[dict[str, Any]]:
-    from agent_verdict.verdict_hot import ledger
+    import agent_verdict.verdict_hot.ledger as ledger
 
     rows: list[dict[str, Any]] = []
     for session_path in ledger.iter_sessions():
@@ -190,33 +274,80 @@ def assert_ledger_rows(rows: list[dict[str, Any]]) -> None:
         )
 
 
-def _run_with_fallback(verdict_home: Path, cwd: Path) -> subprocess.CompletedProcess[str]:
-    result = run_claude(DEFAULT_MODEL, verdict_home, cwd)
-    if result.returncode != 0 and _looks_like_model_rejection(result.stderr):
-        print(
-            f"model alias {DEFAULT_MODEL!r} rejected, retrying with {FALLBACK_MODEL!r}",
-            file=sys.stderr,
+def assert_stop_block_scenario(events: list[dict[str, Any]], rows: list[dict[str, Any]]) -> None:
+    """G2.4: a Stop `hook_response` with `decision == "block"` naming the
+    failing step's tool and exit code, and exactly one ledger `action` row
+    with `action == "block"` for the prompt."""
+    decisions = [d for d in find_hook_decisions(events) if d.get("decision") == "block"]
+    if not decisions:
+        raise AssertionFailure("no decision:block object found anywhere in the stream")
+    if not any("Bash" in d["reason"] and "exit 1" in d["reason"] for d in decisions):
+        raise AssertionFailure(
+            f"no block reason names the failing Bash step (exit 1): {decisions!r}"
         )
-        result = run_claude(FALLBACK_MODEL, verdict_home, cwd)
+
+    block_rows = [r for r in rows if r.get("event") == "action" and r.get("action") == "block"]
+    if len(block_rows) != 1:
+        raise AssertionFailure(f"expected exactly one block action row, found {len(block_rows)}")
+
+
+def assert_stop_shadow_scenario(events: list[dict[str, Any]], rows: list[dict[str, Any]]) -> None:
+    """G2.4 shadow variant: no `decision` ever appears in the stream, and at
+    least one ledger `action` row records `would_have == "block"`."""
+    decisions = find_hook_decisions(events)
+    if decisions:
+        raise AssertionFailure(f"shadow mode printed a decision to the stream: {decisions!r}")
+
+    would_have_block = [r for r in rows if r.get("would_have") == "block"]
+    if not would_have_block:
+        raise AssertionFailure("no action row recorded would_have == 'block'")
+
+
+_Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _run_with_fallback(
+    runner: _Runner, model: str, *args: Any, **kwargs: Any
+) -> subprocess.CompletedProcess[str]:
+    result = runner(model, *args, **kwargs)
+    if result.returncode != 0 and _looks_like_model_rejection(result.stderr):
+        print(f"model alias {model!r} rejected, retrying with {FALLBACK_MODEL!r}", file=sys.stderr)
+        result = runner(FALLBACK_MODEL, *args, **kwargs)
     return result
 
 
-def main(argv: list[str] | None = None) -> int:
-    del argv  # no CLI flags yet; kept for a consistent script entry-point shape
+def _print_failure_debug(
+    scenario: str, exc: AssertionFailure, result: subprocess.CompletedProcess[str], rows: Any
+) -> None:
+    print(f"e2e-cheap {scenario} FAILED: {exc}", file=sys.stderr)
+    print(f"--- claude exit code: {result.returncode} ---", file=sys.stderr)
+    debug_dir = Path(tempfile.gettempdir())
+    (debug_dir / f"verdict-e2e-{scenario}-stdout.log").write_text(result.stdout)
+    (debug_dir / f"verdict-e2e-{scenario}-stderr.log").write_text(result.stderr)
+    print(f"--- full stdout/stderr saved under {debug_dir} ---", file=sys.stderr)
+    print(f"--- {len(rows)} ledger row(s) recorded ---", file=sys.stderr)
+    for row in rows:
+        summary = {
+            k: row.get(k)
+            for k in ("event", "action", "would_have", "gate_reason", "tool_name", "exit_code")
+            if k in row
+        }
+        print(f"  {summary}", file=sys.stderr)
+    print(f"--- last 2000 chars of stdout ---\n{result.stdout[-2000:]}", file=sys.stderr)
+    print(f"--- last 2000 chars of stderr ---\n{result.stderr[-2000:]}", file=sys.stderr)
+
+
+def run_check_fail_scenario() -> int:
     with (
         tempfile.TemporaryDirectory(prefix="verdict-e2e-home-") as home_dir,
         tempfile.TemporaryDirectory(prefix="verdict-e2e-cwd-") as cwd_dir,
     ):
         verdict_home = Path(home_dir)
         cwd = Path(cwd_dir)
-        # Also set it in this process's own environment (not just the
-        # subprocess env dict built in run_claude) so load_ledger_rows'
-        # paths.verdict_home() reads the same temp home when we read the
-        # ledger back after claude exits.
         os.environ["VERDICT_HOME"] = str(verdict_home)
 
         try:
-            result = _run_with_fallback(verdict_home, cwd)
+            result = _run_with_fallback(run_claude, DEFAULT_MODEL, verdict_home, cwd)
         except subprocess.TimeoutExpired:
             print(f"e2e-cheap FAILED: claude -p timed out after {TIMEOUT_S}s", file=sys.stderr)
             return 1
@@ -231,27 +362,85 @@ def main(argv: list[str] | None = None) -> int:
             rows = load_ledger_rows(verdict_home)
             assert_ledger_rows(rows)
         except AssertionFailure as exc:
-            print(f"e2e-cheap FAILED: {exc}", file=sys.stderr)
-            print(f"--- claude exit code: {result.returncode} ---", file=sys.stderr)
-            debug_dir = Path(tempfile.gettempdir())
-            (debug_dir / "verdict-e2e-cheap-stdout.log").write_text(result.stdout)
-            (debug_dir / "verdict-e2e-cheap-stderr.log").write_text(result.stderr)
-            print(f"--- full stdout/stderr saved under {debug_dir} ---", file=sys.stderr)
             rows = load_ledger_rows(verdict_home)
-            print(f"--- {len(rows)} ledger row(s) recorded ---", file=sys.stderr)
-            for row in rows:
-                summary = {
-                    k: row.get(k)
-                    for k in ("event", "tool_name", "status", "exit_code", "never_send")
-                    if k in row
-                }
-                print(f"  {summary}", file=sys.stderr)
-            print(f"--- last 2000 chars of stdout ---\n{result.stdout[-2000:]}", file=sys.stderr)
-            print(f"--- last 2000 chars of stderr ---\n{result.stderr[-2000:]}", file=sys.stderr)
+            _print_failure_debug("check-fail", exc, result, rows)
             return 1
 
     print("e2e-cheap PASSED")
     return 0
+
+
+def run_stop_scenario(scenario: str) -> int:
+    if _API_KEY_ENV not in os.environ or not os.environ[_API_KEY_ENV].strip():
+        print(
+            f"e2e-cheap {scenario} REFUSED: {_API_KEY_ENV} is not set. This scenario calls a "
+            "real provider through claude -p and must not run without a key. Set "
+            f"{_API_KEY_ENV} (never read from ~/.config/agent-verdict/dev.env by this script) "
+            "and re-run.",
+            file=sys.stderr,
+        )
+        return _REFUSE_NO_KEY_EXIT
+
+    mode = _STOP_SCENARIO_MODES[scenario]
+    assert_fn = (
+        assert_stop_block_scenario if scenario == "stop-block" else assert_stop_shadow_scenario
+    )
+
+    with (
+        tempfile.TemporaryDirectory(prefix="verdict-e2e-home-") as home_dir,
+        tempfile.TemporaryDirectory(prefix="verdict-e2e-cwd-") as cwd_dir,
+    ):
+        verdict_home = Path(home_dir)
+        cwd = Path(cwd_dir)
+        shutil.copytree(SCENARIO_REPO, cwd, dirs_exist_ok=True)
+        os.environ["VERDICT_HOME"] = str(verdict_home)
+
+        try:
+            result = _run_with_fallback(
+                run_claude_stop_scenario, DEFAULT_MODEL, verdict_home, cwd, mode
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"e2e-cheap {scenario} FAILED: claude -p timed out after "
+                f"{STOP_SCENARIO_TIMEOUT_S}s",
+                file=sys.stderr,
+            )
+            return 1
+        except FileNotFoundError:
+            print(f"e2e-cheap {scenario} FAILED: claude binary not found on PATH", file=sys.stderr)
+            return 1
+
+        events = parse_stream(result.stdout)
+        try:
+            assert_plugin_loaded_cleanly(events)
+            assert_no_hook_error_text(result.stdout)
+            rows = load_ledger_rows(verdict_home)
+            assert_fn(events, rows)
+        except AssertionFailure as exc:
+            rows = load_ledger_rows(verdict_home)
+            _print_failure_debug(scenario, exc, result, rows)
+            return 1
+
+    print(f"e2e-cheap {scenario} PASSED")
+    return 0
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--scenario",
+        choices=("check-fail", "stop-block", "stop-shadow"),
+        default="check-fail",
+        help="which e2e scenario to run (default: check-fail, gate G1.4)",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_arg_parser().parse_args(argv)
+    if args.scenario == "check-fail":
+        return run_check_fail_scenario()
+    return run_stop_scenario(args.scenario)
 
 
 if __name__ == "__main__":

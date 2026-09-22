@@ -72,12 +72,26 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 strict = true
 python_version = "3.11"
 files = ["src", "scripts", "tests", "plugin/hooks"]
-exclude = ["scripts/fixture_capture_plugin", "vendor", "_redact_rules\\.py$"]
+exclude = [
+    "scripts/fixture_capture_plugin",
+    "vendor",
+    "_redact_rules\\.py$",
+    # A standalone fixture project (task-7-brief.md, G2.4's staged scenario),
+    # not part of this package: its own conftest.py/mathlib.py would
+    # otherwise collide with tests/unit/conftest.py under mypy's basename
+    # module resolution, and its own tests/test_math.py's assertion is
+    # deliberately wrong (the scenario's whole point).
+    "tests/e2e/scenario_repo",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["scripts", "plugin/hooks"]
-addopts = "-q"
+# tests/e2e/scenario_repo is a standalone fixture project for G2.4's staged
+# scenario (task-7-brief.md), copied into a temp cwd and run by a real
+# `claude -p` session, never by our own suite: its one test is deliberately
+# written to fail (add(2, 2) == 5), so it must never be collected here.
+addopts = "-q --ignore=tests/e2e/scenario_repo"
 markers = [
     "slow: exercises multiple processes and may take several seconds",
 ]

@@ -90,3 +90,90 @@ def test_assert_ledger_rows_fails_without_a_matching_post_fail_exit_code() -> No
     ]
     with pytest.raises(ec.AssertionFailure, match="post_fail"):
         ec.assert_ledger_rows(rows)
+
+
+# --- G2.4: stop-block/stop-shadow pure assertions (task-7-brief.md) -----------
+
+
+def test_arg_parser_defaults_to_check_fail_and_accepts_stop_scenarios() -> None:
+    parser = ec.build_arg_parser()
+    assert parser.parse_args([]).scenario == "check-fail"
+    assert parser.parse_args(["--scenario", "stop-block"]).scenario == "stop-block"
+    assert parser.parse_args(["--scenario", "stop-shadow"]).scenario == "stop-shadow"
+
+
+def test_run_stop_scenario_refuses_cleanly_without_an_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert ec.run_stop_scenario("stop-block") == 3
+
+
+def test_find_hook_decisions_locates_the_inner_payload_regardless_of_envelope() -> None:
+    """UNVERIFIED envelope (module docstring): this searches for stop.py's
+    own verified `{"decision": ..., "reason": ...}` stdout shape, wherever
+    the outer stream event happens to nest it."""
+    events: list[dict[str, Any]] = [
+        {"type": "system", "subtype": "init"},
+        {
+            "type": "stream_event",
+            "hook_event_name": "Stop",
+            "response": {"decision": "block", "reason": "Rule R1 ... step 2 (Bash, exit 1): x"},
+        },
+    ]
+    decisions = ec.find_hook_decisions(events)
+    assert decisions == [{"decision": "block", "reason": "Rule R1 ... step 2 (Bash, exit 1): x"}]
+
+
+def test_find_hook_decisions_finds_nothing_in_a_plain_stream() -> None:
+    events: list[dict[str, Any]] = [{"type": "result", "text": "all done"}]
+    assert ec.find_hook_decisions(events) == []
+
+
+def test_assert_stop_block_scenario_passes_with_one_named_block() -> None:
+    events: list[dict[str, Any]] = [
+        {"response": {"decision": "block", "reason": "step 1 (Bash, exit 1): pytest -q"}}
+    ]
+    rows: list[dict[str, Any]] = [{"event": "action", "action": "block"}]
+    ec.assert_stop_block_scenario(events, rows)  # must not raise
+
+
+def test_assert_stop_block_scenario_fails_with_no_decision_in_the_stream() -> None:
+    with pytest.raises(ec.AssertionFailure, match="no decision:block"):
+        ec.assert_stop_block_scenario([], [{"event": "action", "action": "block"}])
+
+
+def test_assert_stop_block_scenario_fails_when_reason_does_not_name_the_step() -> None:
+    events: list[dict[str, Any]] = [{"response": {"decision": "block", "reason": "generic"}}]
+    with pytest.raises(ec.AssertionFailure, match="failing Bash step"):
+        ec.assert_stop_block_scenario(events, [{"event": "action", "action": "block"}])
+
+
+def test_assert_stop_block_scenario_fails_with_more_than_one_block_row() -> None:
+    events: list[dict[str, Any]] = [
+        {"response": {"decision": "block", "reason": "step 1 (Bash, exit 1): pytest -q"}}
+    ]
+    rows: list[dict[str, Any]] = [
+        {"event": "action", "action": "block"},
+        {"event": "action", "action": "block"},
+    ]
+    with pytest.raises(ec.AssertionFailure, match="exactly one block"):
+        ec.assert_stop_block_scenario(events, rows)
+
+
+def test_assert_stop_shadow_scenario_passes_with_would_have_block_and_no_decision() -> None:
+    rows: list[dict[str, Any]] = [{"event": "action", "action": "pass", "would_have": "block"}]
+    ec.assert_stop_shadow_scenario([], rows)  # must not raise
+
+
+def test_assert_stop_shadow_scenario_fails_when_a_decision_leaks_to_the_stream() -> None:
+    events: list[dict[str, Any]] = [{"response": {"decision": "block", "reason": "x"}}]
+    rows: list[dict[str, Any]] = [{"event": "action", "action": "pass", "would_have": "block"}]
+    with pytest.raises(ec.AssertionFailure, match="printed a decision"):
+        ec.assert_stop_shadow_scenario(events, rows)
+
+
+def test_assert_stop_shadow_scenario_fails_without_a_would_have_block_row() -> None:
+    rows: list[dict[str, Any]] = [{"event": "action", "action": "pass"}]
+    with pytest.raises(ec.AssertionFailure, match="would_have"):
+        ec.assert_stop_shadow_scenario([], rows)
