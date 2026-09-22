@@ -305,15 +305,9 @@ def _never_send_for(tool_name: str, tool_input: Mapping[str, object], policy: Po
 
 def _build_stop_fields(event: StopEvent, policy: Policy) -> dict[str, object]:
     from . import claims as claims_mod
-    from . import redact, textnorm
+    from . import textnorm
 
-    normalized, removed = textnorm.normalize(event.last_assistant_message)
-    redacted, hits = redact.redact(normalized)
-    failed = hits == -1
-    if failed:
-        redacted = _REDACTION_FAILED_MARKER
-        hits = 0
-
+    redacted, hits, removed, failed = textnorm.sanitize(event.last_assistant_message)
     claim_list = list(claims_mod.extract_claims(redacted, policy))
     excerpt = textnorm.truncate_anchored(redacted, policy.store.final_message_max_chars, 0)
 

@@ -1,11 +1,9 @@
-"""Stop and SubagentStop orchestration (PLAN.md 5.3, 5.4; task-4-brief.md;
-fix round 1).
+"""Stop and SubagentStop orchestration (PLAN.md 5.3, 5.4; task-4-brief.md).
 
 `handle(payload, policy, now, api_key, transport=None)` never raises: every
-exception is converted into an `action` row with `action="gate_unavailable"`
-and empty stdout. `now` is the MONOTONIC start captured at hook entry
-(`verdict_hook.main`'s `time.monotonic()`), not wall-clock -- the 2.5s Stop
-budget is spent from hook entry, not from `stop.handle` entry.
+exception becomes an `action` row with `action="gate_unavailable"` and empty
+stdout. `now` is the MONOTONIC start captured at hook entry, so the 2.5 s
+Stop budget is spent from hook entry, not from `stop.handle` entry.
 
 Order: stand-down checks (plan mode, background tasks, guard budget spent,
 `_stand_down`) -> verification span -> the G-STOP gate (skip the provider
@@ -181,6 +179,15 @@ class _Ready(NamedTuple):
     questions: Mapping[str, object]
 
 
+def _sanitized_final_message(payload: Mapping[str, object]) -> str:
+    """G2.5: the final message reaches us raw from the Stop payload; it must
+    go through the same normalize+redact pipeline as the ledger row before
+    claims are extracted or the state is built for the provider."""
+    from . import textnorm
+
+    return textnorm.sanitize(_str(payload, "last_assistant_message")).text
+
+
 def _stand_down(
     payload: Mapping[str, object], policy: Policy, start: float
 ) -> tuple[StopOutcome | None, _Ctx, list[dict[str, object]]]:
@@ -192,7 +199,7 @@ def _stand_down(
         agent_id=_opt_str(payload, "agent_id"),
         mode=_resolve_mode(policy),
         is_subagent=_str(payload, "hook_event_name") == "SubagentStop",
-        last_message=_str(payload, "last_assistant_message"),
+        last_message=_sanitized_final_message(payload),
         start=start,
     )
     args = (ctx.session_id, ctx.prompt_id, ctx.agent_id, ctx.mode, ctx.start)

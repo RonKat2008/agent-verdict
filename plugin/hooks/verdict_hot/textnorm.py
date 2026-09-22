@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from typing import NamedTuple
 
 # Zero-width and bidi-control characters (module docstring): zero-width
 # space through right-to-left mark (U+200B-U+200F), the explicit
@@ -64,3 +65,27 @@ def truncate_anchored(text: str, head: int, tail: int) -> str:
     marker = f"\n... [{removed} characters truncated] ...\n"
     tail_start = len(text) - tail
     return text[:head] + marker + text[tail_start:]
+
+
+class Sanitized(NamedTuple):
+    text: str
+    hits: int
+    removed: int
+    failed: bool
+
+
+REDACTION_FAILED_MARKER = "[redaction failed]"
+
+
+def sanitize(text: str) -> Sanitized:
+    """Normalize then redact, the one pipeline for every text that leaves the
+    hook process: ledger rows (recorders.py) and the provider request
+    (stop.py, G2.5). A redactor failure yields the marker, never the raw
+    text (D-017: a redactor exception sends nothing)."""
+    from . import redact
+
+    normalized, removed = normalize(text)
+    redacted, hits = redact.redact(normalized)
+    if hits == -1:
+        return Sanitized(REDACTION_FAILED_MARKER, 0, removed, True)
+    return Sanitized(redacted, hits, removed, False)
