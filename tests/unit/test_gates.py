@@ -268,6 +268,8 @@ def test_is_check_rejects_non_leading_runner_mentions(default_policy: Policy, co
         "hatch run pytest",
         "pdm run pytest",
         "rye run pytest",
+        "nice pytest -q",
+        "xargs pytest -q",
     ],
 )
 def test_is_check_recognizes_widened_runner_coverage(default_policy: Policy, command: str) -> None:

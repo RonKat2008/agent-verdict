@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import stat
 from pathlib import Path
@@ -278,3 +279,35 @@ def test_output_file_is_mode_0600(cli_verdict_home: Path, tmp_path: Path) -> Non
     export.main(["--goldset", "--out", str(out_path)])
 
     assert stat.S_IMODE(out_path.stat().st_mode) == 0o600
+
+
+# --- Task 7 cleanup: no double-close once os.fdopen owns the fd ----------------
+
+
+def test_write_goldset_does_not_double_close_the_fd_when_the_write_loop_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Controller notes addendum (task-7-brief.md): once `os.fdopen`
+    succeeds, the `with` block owns `fd` and closes it itself on every exit
+    path, including an exception raised while writing a row. The `except`
+    handler in `_write_goldset` must not also call `os.close(fd)` in that
+    case -- by the time it would, the OS may already have reused that
+    descriptor number for an unrelated file. Regression test for
+    `export.py`'s pre-fix `_write_goldset`, which called `os.close(fd)`
+    unconditionally in its `except` handler."""
+    close_calls: list[int] = []
+    real_close = os.close
+
+    def _tracking_close(fd: int) -> None:
+        close_calls.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(os, "close", _tracking_close)
+
+    out_path = tmp_path / "goldset.jsonl"
+    bad_rows: list[dict[str, Any]] = [{"ok": object()}]  # not JSON-serializable
+
+    with pytest.raises(TypeError):
+        export._write_goldset(out_path, bad_rows)
+
+    assert close_calls == []

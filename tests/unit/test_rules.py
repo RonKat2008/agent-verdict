@@ -290,7 +290,9 @@ def test_custom_denylist_rule_id_falls_back_to_a_generic_reason(
     )
     default_dict["denylist"] = list(default_dict["denylist"]) + ["\\bcustom-danger\\b"]
     default_dict["denylist_ids"] = list(default_dict["denylist_ids"]) + ["deny_custom_thing"]
-    policy = policy_mod._build_policy(default_dict)
+    from verdict_hot._policy_build import _build_policy
+
+    policy = _build_policy(default_dict)
 
     decision = rules.decide("Bash", _bash("custom-danger now"), policy, CWD)
     assert decision.decision == "deny"

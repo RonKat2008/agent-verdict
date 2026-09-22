@@ -233,17 +233,31 @@ def _write_goldset(out_path: Path, rows: list[dict[str, Any]]) -> None:
     """Writes `out_path` mode 0600 from creation (fix round 1, M7): the
     goldset is derived and redaction-checked, but it is still an export
     artifact that should never be left world- or group-readable by an
-    inherited umask."""
+    inherited umask.
+
+    Task-7 fix (controller notes addendum): `os.fdopen` takes ownership of
+    `fd` once it succeeds -- the `with` block's own `__exit__` then closes
+    it, on every exit path including an exception raised while writing.
+    Without `owned`, the `except` handler below closed `fd` a second time
+    in that case, on a descriptor number the OS may already have reused for
+    an unrelated open file. `owned` is only ever set True after `os.fdopen`
+    itself has returned successfully, so the explicit `os.close(fd)` here
+    now runs only when `fd` is still ours to close (an error from
+    `os.fchmod`, or from `os.fdopen` itself).
+    """
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(str(out_path), flags, _OUTPUT_FILE_MODE)
+    owned = False
     try:
         os.fchmod(fd, _OUTPUT_FILE_MODE)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            owned = True
             for row in rows:
                 fh.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
     except BaseException:
-        with contextlib.suppress(OSError):
-            os.close(fd)
+        if not owned:
+            with contextlib.suppress(OSError):
+                os.close(fd)
         raise
 
 

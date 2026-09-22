@@ -73,6 +73,8 @@ _WRAPPERS = (
     "time",
     "sudo",
     "env",
+    "nice",
+    "xargs",
 )
 
 

@@ -265,97 +265,6 @@ def _build_from_rows(
     )
 
 
-# --- Walk-back over prompts ---------------------------------------------------
-
-
-def _is_clean_stop_row(row: Mapping[str, object]) -> bool:
-    """A clean stop is a *verified* pass: the verifier ran (no stand-down or
-    guard demotion), would not have blocked or flagged in enforce mode (fix
-    rounds 2 and 3: shadow records `would_have` for every decision, and only
-    a counterfactual block or flag disqualifies), and left no open
-    failures."""
-    if row.get("event") != "action" or row.get("action") != "pass":
-        return False
-    gate_reason = row.get("gate_reason")
-    if gate_reason in STAND_DOWN_GATE_REASONS:
-        return False
-    if isinstance(gate_reason, str) and gate_reason.startswith(_GUARD_GATE_PREFIX):
-        return False
-    if row.get("would_have") in _COUNTERFACTUAL_DECISIONS:
-        return False
-    return not row.get("open_failures")
-
-
-def _has_clean_stop(block_rows: list[Mapping[str, object]]) -> bool:
-    return any(_is_clean_stop_row(row) for row in block_rows)
-
-
-def _clear_between(
-    clear_indices: list[int],
-    last_idx: Mapping[str, int],
-    first_idx: Mapping[str, int],
-    older_prompt: str,
-    newer_prompt: str,
-) -> bool:
-    if older_prompt not in last_idx or newer_prompt not in first_idx:
-        return False
-    lo, hi = last_idx[older_prompt], first_idx[newer_prompt]
-    return any(lo < idx < hi for idx in clear_indices)
-
-
-def _walk_back(
-    safe_rows: list[Mapping[str, object]], current_prompt_id: str, max_prompts: int
-) -> tuple[list[str], str] | None:
-    """Returns (included prompt ids, most-recent-first, stop reason), or
-    `None` when `current_prompt_id` names no row in `safe_rows` at all."""
-    seen: list[str] = []
-    first_idx: dict[str, int] = {}
-    last_idx: dict[str, int] = {}
-    clear_indices: list[int] = []
-    for idx, row in enumerate(safe_rows):
-        pid = _prompt_id_of(row)
-        if pid is not None:
-            if pid not in first_idx:
-                first_idx[pid] = idx
-                seen.append(pid)
-            last_idx[pid] = idx
-        if row.get("event") == "session_start" and row.get("source") == "clear":
-            clear_indices.append(idx)
-
-    if current_prompt_id not in first_idx:
-        return None
-
-    included = [current_prompt_id]
-    idx = seen.index(current_prompt_id)
-    reason = "start_of_session"
-    while True:
-        if len(included) >= max_prompts:
-            reason = "max_prompts"
-            break
-        if idx == 0:
-            reason = "start_of_session"
-            break
-        prev_pid = seen[idx - 1]
-        if _clear_between(clear_indices, last_idx, first_idx, prev_pid, included[-1]):
-            reason = "clear"
-            break
-        # Fix round 1 (Critical): a clean stop is a BOUNDARY, not a member.
-        # Prompts at or before the most recent clean stop were already
-        # judged and passed, so the candidate older block is checked for a
-        # clean stop *before* it is added -- if it has one, the walk stops
-        # here and that block (and everything before it) is excluded
-        # entirely, never re-litigated. The current prompt (`included[0]`)
-        # is never subject to this check: it is always a member.
-        candidate_rows = [r for r in safe_rows if _prompt_id_of(r) == prev_pid]
-        if _has_clean_stop(candidate_rows):
-            reason = "clean_stop"
-            break
-        included.append(prev_pid)
-        idx -= 1
-
-    return included, reason
-
-
 def build_span(
     rows: Sequence[Mapping[str, object]], current_prompt_id: str | None, policy: Policy
 ) -> Span:
@@ -372,6 +281,8 @@ def build_span(
         bucket = [r for r in safe_rows if r.get("prompt_id") is None]
         span_prompt_ids: tuple[str | None, ...] = (None,) if bucket else ()
         return _build_from_rows(bucket, span_prompt_ids, "null_prompt_id", t_ack_hi)
+
+    from ._span_walkback import _walk_back
 
     walked = _walk_back(safe_rows, current_prompt_id, policy.span.max_prompts)
     if walked is None:
