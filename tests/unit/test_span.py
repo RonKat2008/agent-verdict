@@ -90,6 +90,7 @@ def _action(
     action_value: str = "pass",
     open_failures: list[str] | None = None,
     gate_reason: str | None = None,
+    would_have: str | None = None,
 ) -> dict[str, Any]:
     return {
         "event": "action",
@@ -97,6 +98,7 @@ def _action(
         "action": action_value,
         "open_failures": [] if open_failures is None else open_failures,
         "gate_reason": gate_reason,
+        "would_have": would_have,
     }
 
 
@@ -469,3 +471,38 @@ def test_build_span_never_raises_on_arbitrary_rows(
     rows: list[dict[str, Any]], current_prompt_id: str | None
 ) -> None:
     span.build_span(rows, current_prompt_id, _POLICY)
+
+
+def test_a_shadow_would_have_block_is_never_a_clean_stop() -> None:
+    """Fix round 2 (re-review N1): in shadow mode an R2 block is recorded as
+    `action="pass"` with `would_have="block"` and no open failures. The
+    verifier found a problem, so the row must not bound the next span."""
+    rows = [
+        _prompt("p1"),
+        _post("p1", command="echo edit", tool_use_id="e0"),
+        _action("p1", action_value="pass", gate_reason="evidence", would_have="block"),
+        _prompt("p2"),
+        _post("p2", command="echo hi", tool_use_id="e1"),
+    ]
+
+    result = span.build_span(rows, "p2", _POLICY)
+
+    assert result.reason != "clean_stop"
+    assert result.span_prompt_ids == ("p1", "p2")
+
+
+def test_a_guard_demoted_block_is_never_a_clean_stop() -> None:
+    """Fix round 2 (re-review N1): an enforce-mode block demoted to pass by
+    the loop guard carries `gate_reason="guard_..."` and must not bound."""
+    rows = [
+        _prompt("p1"),
+        _post_fail("p1", command="pytest", tool_use_id="f1"),
+        _action("p1", action_value="pass", gate_reason="guard_budget_spent", would_have="block"),
+        _prompt("p2"),
+        _post("p2", command="echo hi", tool_use_id="e1"),
+    ]
+
+    result = span.build_span(rows, "p2", _POLICY)
+
+    assert result.reason != "clean_stop"
+    assert result.unresolved_failures != ()

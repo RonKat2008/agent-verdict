@@ -6,26 +6,17 @@ as `ledger.append_row` wrote them) into a `Span` -- the evidence Stop's
 completion verifier reasons about (state.py, Task 2, shapes this further
 into the provider request).
 
-Row shapes consumed. Four of the six M1 event types
-(schemas/ledger-v1.json) matter here, plus two Task 4 introduces -- this
-module already understands their documented shape (task-1-brief.md,
-docs/PLAN.md 5.3's Task 4 interface) so Task 4's recorder writes exactly
-these fields and nothing else:
+Row shapes consumed (schemas/ledger-v1.json):
 
-- `post` / `post_fail` (plugin/hooks/verdict_hot/recorders.py): `tool_name`,
-  `tool_use_id`, `input_excerpt`, `status` (`"ok"` on every `post` row,
-  `"error"` on every `post_fail` row), `is_check`, `soft_fail_candidate`
-  (`post` only -- always false-equivalent on `post_fail`), `never_send`,
-  `out_head` + `out_tail` (`post`), `error_excerpt` (`post_fail`),
-  `exit_code` (`post_fail`), `prompt_id`.
-- `prompt`/`session_start`: `prompt_id` (null for `session_start`), `prompt_excerpt`/`source`.
-- `action` (Task 4, guard.py): `prompt_id`, `action` (e.g. `"pass"`),
-  `open_failures` (unresolved `tool_use_id`s), `gate_reason` (fix round 1
-  item 2: excludes a stand-down row from ever being a clean stop).
-- `verdict` (Task 4, provider.py/verdict_policy.py): `prompt_id`,
-  `question_key`, `answer` (a dict with a numeric `noul` field, 0..1),
-  `listed_failures` -- a list of `tool_use_id`s the question was asked
-  about.
+- `post` / `post_fail`: `tool_name`, `tool_use_id`, `input_excerpt`,
+  `status` (`"ok"` / `"error"`), `is_check`, `soft_fail_candidate`,
+  `never_send`, `out_head` + `out_tail`, `error_excerpt`, `exit_code`,
+  `prompt_id`.
+- `prompt`/`session_start`: `prompt_id` (null for `session_start`), `source`.
+- `action` (stop.py): `prompt_id`, `action`, `open_failures`, `gate_reason`,
+  `would_have` -- see `_is_clean_stop_row` for which rows bound a span.
+- `verdict` (stop.py): `prompt_id`, `question_key`, `answer` (dict with a
+  numeric `noul`, 0..1), `listed_failures` (`tool_use_id`s asked about).
 
 Every field is read with `.get()` plus a type check, never assumed present
 or well-typed: `build_span` must never raise on a malformed, truncated, or
@@ -52,16 +43,16 @@ _MUTATING_FILE_TOOLS = ("Write", "Edit", "NotebookEdit")
 _BASH_TOOL = "Bash"
 _STEP_EVENTS = ("post", "post_fail")
 
-# Stand-down `gate_reason` values (fix round 1 item 2): an `action` row
-# written for one of these never counts as a clean stop in `_has_clean_stop`
-# even though `action == "pass"` -- the verifier never ran. `stop.py`
-# imports these same names, so the two modules cannot drift apart.
+# Stand-down `gate_reason` values (fix round 1 item 2): never a clean stop
+# even though `action == "pass"` -- the verifier never ran. `stop.py` imports
+# these same names, so the two modules cannot drift apart.
 GATE_REASON_SKIPPED_PLAN_MODE = "skipped_plan_mode"
 GATE_REASON_SKIPPED_BACKGROUND = "skipped_background"
 GATE_REASON_SKIPPED_GUARD = "skipped_guard"
 GATE_REASON_LOCAL_ONLY = "local_only"
 GATE_REASON_CASSETTE_MISSING = "cassette_missing"
 GATE_REASON_NO_KEY = "no_key"
+_GUARD_GATE_PREFIX = "guard_"  # stop.py: an enforce block demoted by the loop guard
 STAND_DOWN_GATE_REASONS = (
     GATE_REASON_SKIPPED_PLAN_MODE,
     GATE_REASON_SKIPPED_BACKGROUND,
@@ -280,16 +271,23 @@ def _build_from_rows(
 # --- Walk-back over prompts ---------------------------------------------------
 
 
+def _is_clean_stop_row(row: Mapping[str, object]) -> bool:
+    """A clean stop is a *verified* pass: the verifier ran (no stand-down or
+    guard demotion), would not have blocked or flagged even in enforce mode
+    (fix round 2, re-review N1: shadow records those as `pass` with
+    `would_have` set), and left no open failures."""
+    if row.get("event") != "action" or row.get("action") != "pass":
+        return False
+    gate_reason = row.get("gate_reason")
+    if gate_reason in STAND_DOWN_GATE_REASONS:
+        return False
+    if isinstance(gate_reason, str) and gate_reason.startswith(_GUARD_GATE_PREFIX):
+        return False
+    return not row.get("would_have") and not row.get("open_failures")
+
+
 def _has_clean_stop(block_rows: list[Mapping[str, object]]) -> bool:
-    for row in block_rows:
-        if (
-            row.get("event") == "action"
-            and row.get("action") == "pass"
-            and row.get("gate_reason") not in STAND_DOWN_GATE_REASONS
-            and not row.get("open_failures")
-        ):
-            return True
-    return False
+    return any(_is_clean_stop_row(row) for row in block_rows)
 
 
 def _clear_between(
