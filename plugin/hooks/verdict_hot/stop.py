@@ -35,7 +35,7 @@ from . import ledger, verdict_policy
 from . import span as span_mod
 from .cassettes import MissingCassette
 from .policy import Policy
-from .provider import PRESETS, Preset, ProviderResult
+from .provider import Preset, ProviderResult
 from .questions import build_questions
 from .span import Span, build_span
 from .state import build_state
@@ -242,7 +242,7 @@ def _gate_and_prepare(
         return _finish(
             *args, action="pass", gate_reason=local_only_gate, open_failures=open_failures
         )
-    preset = PRESETS.get(provider_name, PRESETS["openrouter"])
+    preset = sp.resolve_preset(provider_name)
     api_key = sp.resolve_api_key(preset, api_key_arg)
     if not api_key:
         no_key_gate = span_mod.GATE_REASON_NO_KEY
@@ -273,7 +273,7 @@ def _call_and_decide(
     transport: object,
 ) -> StopOutcome:
     args = (ctx.session_id, ctx.prompt_id, ctx.agent_id, ctx.mode, ctx.start)
-    call_transport = transport if transport is not None else sp.cassette_transport()
+    call_transport = sp.resolve_transport(transport)
 
     result = sp.call_provider(
         ready.state, ready.questions, ready.preset, ready.api_key, policy, ctx.start, call_transport

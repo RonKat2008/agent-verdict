@@ -1,4 +1,4 @@
-.PHONY: setup check test test-fast sync-hot gen-redact regen-golden capture-fixtures bench-provider bench-hook e2e-cheap plugin-validate doctor clean
+.PHONY: setup check test test-fast sync-hot gen-redact regen-golden capture-fixtures coverage-hot bench-provider bench-hook e2e-cheap plugin-validate doctor clean
 
 setup:
 	uv sync
@@ -33,6 +33,9 @@ test-fast:
 capture-fixtures:
 	sh scripts/capture_tasks.sh
 	uv run python scripts/process_fixtures.py
+
+coverage-hot:
+	uv run python scripts/coverage_hot.py
 
 bench-provider:
 	uv run python scripts/smoke_jev.py --n $(or $(N),30) --provider openrouter --provider typesafe --json

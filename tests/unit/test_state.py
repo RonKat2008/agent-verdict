@@ -404,12 +404,26 @@ def _spans(draw: st.DrawFn) -> tuple[Span, str, tuple[str, ...]]:
 def test_build_state_respects_hard_cap_and_protects_key_rows(
     data: tuple[Span, str, tuple[str, ...]],
 ) -> None:
+    """PLAN.md G2.1's two named properties, both checked here:
+
+    1. "state never exceeds `state.max_tokens`" -- the token-cap assertion.
+    2. "error rows always survive compression" -- generalized to every
+       protected row (error, soft-fail, and check steps, per this test
+       module's own "Hypothesis: compression invariants" comment above),
+       the surviving-seqs assertion.
+    """
     span, final_message, claims_tuple = data
 
     result, overflow = _build(span, final_message, claims_tuple, POLICY)
 
     tokens = len(json.dumps(result, ensure_ascii=False)) // 4
     assert tokens <= POLICY.state.max_tokens
+
+    protected_seqs = {
+        s.seq for s in span.steps if s.is_check or s.status == "error" or s.soft_fail_candidate
+    }
+    remaining_seqs = {s["seq"] for s in result["trusted_facts"]["steps"]}
+    assert protected_seqs <= remaining_seqs
 
     remaining_seqs = {s["seq"] for s in result["trusted_facts"]["steps"]}
     protected_seqs = {

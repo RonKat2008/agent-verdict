@@ -41,6 +41,16 @@ from .policy import Policy
 
 _VALID_PROVIDERS = ("openrouter", "typesafe", "local-only")
 
+# Test-only failure injection (task-7-brief.md controller notes ruling 2,
+# G2.3): `VERDICT_FAKE_PROVIDER` is guarded exactly like `VERDICT_CASSETTE_DIR`
+# above -- production code never sets it, and it only ever selects a
+# fixed-shape canned response or (for "no_network") a preset host override,
+# never real network behavior. `tests/integration/test_stop_failure_injection.py`
+# is the only place this is exercised, through `run.sh` as a subprocess.
+_FAKE_PROVIDER_ENV = "VERDICT_FAKE_PROVIDER"
+_FAKE_PROVIDER_MODES = ("timeout", "429", "500", "malformed", "no_network")
+_FAKE_NO_NETWORK_HOST = "verdict-test-unresolvable.invalid"
+
 TIMEOUT_RESULT = provider_mod.ProviderResult(
     ok=False,
     answers={},
@@ -70,6 +80,54 @@ def resolve_api_key(preset: provider_mod.Preset, override: str | None) -> str:
 def cassette_transport() -> Callable[..., tuple[int, bytes, float, float]] | None:
     cassette_dir = os.environ.get("VERDICT_CASSETTE_DIR")
     return RecordedTransport(Path(cassette_dir)) if cassette_dir else None
+
+
+def fake_provider_mode() -> str | None:
+    """Test-only (module docstring above). One of `_FAKE_PROVIDER_MODES`,
+    or `None` when unset or set to anything else."""
+    raw = os.environ.get(_FAKE_PROVIDER_ENV, "").strip().lower()
+    return raw if raw in _FAKE_PROVIDER_MODES else None
+
+
+def _fake_response(mode: str) -> tuple[int, bytes, float, float]:
+    if mode == "timeout":
+        # A pathological transport `evaluate` cannot interrupt: bounded by
+        # `_call_with_timeout`'s own thread.join(remaining), same as the
+        # provider.py module docstring's "sleeps 3s" budget test.
+        time.sleep(10.0)
+        return 200, b"{}", 0.0, 0.0
+    if mode == "429":
+        return 429, b'{"error":"rate limited"}', 0.0, 0.0
+    if mode == "500":
+        return 500, b'{"error":"internal"}', 0.0, 0.0
+    return 200, b"not json", 0.0, 0.0  # "malformed"
+
+
+def fake_transport() -> Callable[..., tuple[int, bytes, float, float]] | None:
+    """Test-only (module docstring above). `None` for every mode except the
+    four with a canned transport response; `"no_network"` instead swaps the
+    real preset host via `resolve_preset` and lets the real transport run."""
+    mode = fake_provider_mode()
+    if mode is None or mode == "no_network":
+        return None
+    return lambda *_args: _fake_response(mode)
+
+
+def resolve_transport(explicit: object) -> object:
+    """`explicit` (a caller-supplied test transport) wins; otherwise a fake
+    failure-injection transport if `VERDICT_FAKE_PROVIDER` selects one, else
+    the cassette transport if `VERDICT_CASSETTE_DIR` is set, else `None`
+    (the real transport)."""
+    if explicit is not None:
+        return explicit
+    return fake_transport() or cassette_transport()
+
+
+def resolve_preset(provider_name: str) -> provider_mod.Preset:
+    preset = provider_mod.PRESETS.get(provider_name, provider_mod.PRESETS["openrouter"])
+    if fake_provider_mode() == "no_network":
+        preset = preset._replace(host=_FAKE_NO_NETWORK_HOST)
+    return preset
 
 
 def _call_with_timeout(
@@ -137,6 +195,10 @@ __all__ = [
     "TIMEOUT_RESULT",
     "call_provider",
     "cassette_transport",
+    "fake_provider_mode",
+    "fake_transport",
     "resolve_api_key",
+    "resolve_preset",
     "resolve_provider_name",
+    "resolve_transport",
 ]
