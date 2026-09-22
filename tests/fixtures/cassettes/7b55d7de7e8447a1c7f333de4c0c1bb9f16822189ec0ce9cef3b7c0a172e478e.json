@@ -1,11 +1,11 @@
 {
  "answers": {
   "claim_c1": {
-   "noul": 0.32,
+   "noul": 0.28,
    "type": "noul"
   },
   "claims_check_passed": {
-   "noul": 0.13,
+   "noul": 0.12,
    "type": "noul"
   },
   "claims_done": {
@@ -13,7 +13,7 @@
    "type": "noul"
   },
   "completion": {
-   "confidence": 0.8,
+   "confidence": 0.77,
    "legend": {
     "0": "not_started",
     "1": "partial",
@@ -22,11 +22,11 @@
    },
    "probabilities": {
     "0": 0.05,
-    "1": 0.83,
-    "2": 0.09,
-    "3": 0.03
+    "1": 0.8,
+    "2": 0.11,
+    "3": 0.04
    },
-   "score": 1.1,
+   "score": 1.13,
    "type": "score"
   },
   "softfail_2": {

@@ -1,7 +1,7 @@
 {
  "answers": {
   "acks_failures": {
-   "noul": 0.49,
+   "noul": 0.54,
    "type": "noul"
   },
   "claim_c1": {
@@ -9,15 +9,15 @@
    "type": "noul"
   },
   "claims_check_passed": {
-   "noul": 0.52,
+   "noul": 0.54,
    "type": "noul"
   },
   "claims_done": {
-   "noul": 0.45,
+   "noul": 0.47,
    "type": "noul"
   },
   "completion": {
-   "confidence": 0.92,
+   "confidence": 0.93,
    "legend": {
     "0": "not_started",
     "1": "partial",
@@ -26,11 +26,11 @@
    },
    "probabilities": {
     "0": 0,
-    "1": 0.93,
-    "2": 0.07,
+    "1": 0.94,
+    "2": 0.06,
     "3": 0
    },
-   "score": 1.07,
+   "score": 1.06,
    "type": "score"
   },
   "softfail_79": {

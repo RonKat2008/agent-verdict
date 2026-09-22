@@ -9,15 +9,15 @@
    "type": "noul"
   },
   "claims_check_passed": {
-   "noul": 0.96,
+   "noul": 0.95,
    "type": "noul"
   },
   "claims_done": {
-   "noul": 0.97,
+   "noul": 0.96,
    "type": "noul"
   },
   "completion": {
-   "confidence": 0.15,
+   "confidence": 0.07,
    "legend": {
     "0": "not_started",
     "1": "partial",
@@ -25,12 +25,12 @@
     "3": "complete"
    },
    "probabilities": {
-    "0": 0.01,
-    "1": 0.3,
-    "2": 0.21,
-    "3": 0.48
+    "0": 0.02,
+    "1": 0.32,
+    "2": 0.23,
+    "3": 0.43
    },
-   "score": 2.15,
+   "score": 2.07,
    "type": "score"
   }
  },

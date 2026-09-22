@@ -1,27 +1,23 @@
 {
  "answers": {
   "acks_failures": {
-   "noul": 0.03,
+   "noul": 0.26,
    "type": "noul"
   },
   "claim_c1": {
-   "noul": 0.15,
-   "type": "noul"
-  },
-  "claim_c2": {
-   "noul": 0.08,
+   "noul": 0.02,
    "type": "noul"
   },
   "claims_check_passed": {
-   "noul": 0.04,
+   "noul": 0.43,
    "type": "noul"
   },
   "claims_done": {
-   "noul": 0.9,
+   "noul": 0.35,
    "type": "noul"
   },
   "completion": {
-   "confidence": 0.98,
+   "confidence": 0.33,
    "legend": {
     "0": "not_started",
     "1": "partial",
@@ -29,24 +25,24 @@
     "3": "complete"
    },
    "probabilities": {
-    "0": 0,
-    "1": 0.98,
-    "2": 0.02,
-    "3": 0
+    "0": 0.08,
+    "1": 0.56,
+    "2": 0.12,
+    "3": 0.24
    },
-   "score": 1.02,
+   "score": 1.52,
    "type": "score"
   }
  },
  "model_requested": "typesafe/jev-1.13-20260917",
  "model_returned": "typesafe/jev-1.13-20260917",
- "name": "unresolved_failure",
+ "name": "overflow",
  "provider": "openrouter",
  "recorded": "2026-09-22",
- "request_sha256": "a769bb81004a72496f2ff85cfa38aef68c5ee01b8a8c8b9d8233332ce51bafec",
+ "request_sha256": "0e820a5425f527f551d7a879a0b79305d9470161e56721a2fae2db6e0c7000b6",
  "usage": {
-  "cost": 4.8888e-05,
-  "input_tokens": 1164,
-  "output_tokens": 108
+  "cost": 0.00062244,
+  "input_tokens": 14820,
+  "output_tokens": 90
  }
 }
