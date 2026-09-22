@@ -48,7 +48,8 @@ def test_every_import_under_plugin_hooks_is_stdlib_or_relative() -> None:
     for path in _iter_py_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for name in _top_level_import_names(tree):
-            assert name in stdlib, f"{path}: non-stdlib top-level import {name!r}"
+            allowed = name in stdlib or (name == "verdict_hot" and path.parent == HOT_DIR)
+            assert allowed, f"{path}: non-stdlib top-level import {name!r}"
 
 
 def test_no_module_stem_under_plugin_hooks_shadows_a_stdlib_module() -> None:

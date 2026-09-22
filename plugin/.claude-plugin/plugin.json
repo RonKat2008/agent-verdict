@@ -1,0 +1,18 @@
+{
+  "name": "agent-verdict",
+  "version": "0.1.0",
+  "description": "Records Claude Code tool outcomes to a local, private ledger for later review. This version sends nothing over the network.",
+  "author": {
+    "name": "Ronit Katikaneni"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "shadow records everything and never blocks or nudges; enforce may block on strong evidence (not available until a later version); off disables recording entirely.",
+      "options": ["shadow", "enforce", "off"],
+      "default": "shadow"
+    }
+  }
+}

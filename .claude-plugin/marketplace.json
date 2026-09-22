@@ -1,0 +1,14 @@
+{
+  "name": "agent-verdict",
+  "description": "Marketplace for agent-verdict, a plugin that records Claude Code tool outcomes to a local, private ledger.",
+  "owner": {
+    "name": "Ronit Katikaneni"
+  },
+  "plugins": [
+    {
+      "name": "agent-verdict",
+      "source": "./plugin",
+      "description": "Records Claude Code tool outcomes to a local, private ledger for later review."
+    }
+  ]
+}

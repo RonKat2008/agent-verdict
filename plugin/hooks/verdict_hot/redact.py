@@ -39,6 +39,7 @@ unexpected internal exception makes `redact_detail` return
 from __future__ import annotations
 
 import math
+import os
 import re
 from collections import Counter
 
@@ -184,8 +185,39 @@ def _attribute(spans: set[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
     return sorted((start, end, rule_id) for (start, end), rule_id in best.items())
 
 
-def _redact_unsafe(text: str) -> tuple[str, tuple[str, ...]]:
+_ENV_RULE_ID = "env-configured-secret"
+_ENV_SECRET_PREFIX = "CLAUDE_PLUGIN_OPTION_"
+_ENV_SECRET_EXACT_NAMES = frozenset({"OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "ANTHROPIC_API_KEY"})
+_MIN_ENV_SECRET_LEN = 8
+
+
+def _env_secret_values() -> tuple[str, ...]:
+    """Values of this process's own configured secrets, whatever their format.
+
+    A key the user configured for the plugin, or a provider key in the
+    environment, must never reach the ledger even when no pattern rule
+    recognizes its shape (an echoed key is the most likely leak path).
+    """
+    values = []
+    for name, value in os.environ.items():
+        is_secret_name = name.startswith(_ENV_SECRET_PREFIX) or name in _ENV_SECRET_EXACT_NAMES
+        if is_secret_name and value and len(value) >= _MIN_ENV_SECRET_LEN:
+            values.append(value)
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+def _env_value_spans(text: str) -> set[tuple[int, int, str]]:
     spans: set[tuple[int, int, str]] = set()
+    for value in _env_secret_values():
+        start = text.find(value)
+        while start != -1:
+            spans.add((start, start + len(value), _ENV_RULE_ID))
+            start = text.find(value, start + len(value))
+    return spans
+
+
+def _redact_unsafe(text: str) -> tuple[str, tuple[str, ...]]:
+    spans: set[tuple[int, int, str]] = _env_value_spans(text)
     for offset, window in _windows(text):
         lowered = window.lower()
         for start, end, rule_id in _rule_hits(window, lowered):
