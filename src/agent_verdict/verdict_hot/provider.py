@@ -23,15 +23,13 @@ copies of the same recipe drifting apart.
 
 Deadline handling: `deadline_s` is an absolute budget for connect plus
 request plus read (task-3-brief.md controller notes). The real transport
-(`transport=None`) sets the socket timeout to whatever budget remains
-before each phase and aborts with `timeout` the moment the budget is
-already spent, rather than handing `http.client` the full deadline and
-hoping. An injected `transport` cannot be interrupted mid-call (it is a
-plain function, not a socket), so `evaluate` instead checks the elapsed
-wall time immediately after it returns and converts a still-successful
-response into `timeout` if the budget was exceeded -- this is what makes a
-fake transport that sleeps past the deadline exercise the same `timeout`
-path a slow real connection would.
+(`transport=None`) re-arms the socket timeout to the remaining budget
+before connect, before send, and before every chunked read, so a server
+that dribbles bytes cannot hold the hook past the deadline; the body is
+also capped at `_MAX_BODY_BYTES` (`response_too_large`). An injected
+`transport` is a plain function that cannot be interrupted, so `evaluate`
+checks wall time after it returns and converts a late success into
+`timeout`.
 
 Answer validation: every key in `questions` must have a matching entry in
 the response's `answers` object whose own `type` matches the question's
@@ -41,12 +39,10 @@ the response's `answers` object whose own `type` matches the question's
 what was asked are ignored. Anything else -- a missing key, a wrong type,
 an out-of-range value -- is `invalid_answers`.
 
-`Breaker` persists at `paths.verdict_home() / "breaker.json"`, mode 0600.
-Three consecutive HTTP 429 responses open it for 600 seconds; any 200
-resets the consecutive count. It never raises: a missing, corrupt, or
-unwritable state file behaves as closed. `evaluate` consults it before
-making a call (an open breaker short-circuits to `error="breaker_open"`
-with no call at all) and records the real HTTP status after one completes.
+`Breaker` (breaker.py) persists at `paths.verdict_home() / "breaker.json"`,
+mode 0600, O_NOFOLLOW. Three consecutive HTTP 429s open it for 600 s; any
+200 resets the count; it never raises. `evaluate` consults it before a call
+(`breaker_open`, no call made) and records the real status afterwards.
 
 Security: the API key is used only to build the `Authorization: Bearer`
 header handed to the transport; it is never written into a returned
@@ -63,18 +59,12 @@ the provider call -- most hook invocations never import it at all.
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import NamedTuple
 
-from . import paths
-
-_BREAKER_FILENAME = "breaker.json"
-_BREAKER_OPEN_SECONDS = 600
-_BREAKER_THRESHOLD = 3
-_BREAKER_FILE_MODE = 0o600
+from .breaker import Breaker
+from .cassettes import MissingCassette, RecordedTransport
 
 Transport = Callable[[str, str, bytes, Mapping[str, str]], tuple[int, bytes, float, float]]
 
@@ -114,19 +104,6 @@ class ProviderResult(NamedTuple):
     infer_ms: float
     status: int
     error: str | None
-
-
-class MissingCassette(Exception):
-    """Raised by `RecordedTransport` when no cassette matches the request.
-
-    Deliberately allowed to escape `evaluate` uncaught (see module
-    docstring): a recording gap is not a provider failure, and tests
-    convert this into `pytest.skip`, never into a `ProviderResult`.
-    """
-
-    def __init__(self, sha: str) -> None:
-        super().__init__(f"no cassette recorded for request sha256={sha}")
-        self.sha = sha
 
 
 class _TimeoutSignal(Exception):
@@ -233,60 +210,119 @@ def _finish(
     )
 
 
+_MAX_BODY_BYTES = 512 * 1024
+_READ_CHUNK = 65536
+
+
+class _TooLargeSignal(Exception):
+    def __init__(self, conn_ms: float = 0.0) -> None:
+        self.conn_ms = conn_ms
+
+
 def _real_call(
     preset: Preset, body: bytes, headers: Mapping[str, str], deadline_s: float, start: float
 ) -> tuple[int, bytes, float, float]:
-    """Open a real HTTPS connection, honoring the remaining deadline before
-    each phase. Raises `_TimeoutSignal`/`_ConnectErrorSignal`, caught by
-    `_evaluate`, rather than returning a `ProviderResult` itself, so the
-    injected-`transport` and real-socket paths converge on one place."""
+    """Open a real HTTPS connection, re-deriving the remaining budget before
+    EVERY phase and every read chunk, so a slow or dribbling server can never
+    hold the process past `deadline_s`, and capping the body at
+    `_MAX_BODY_BYTES` (fix round 1). Raises the `_*Signal` exceptions that
+    `_evaluate` converts into fixed-string errors."""
+    import http.client
+
+    from . import sslctx
+
+    def remaining() -> float:
+        return deadline_s - (time.monotonic() - start)
+
+    if remaining() <= 0:
+        raise _TimeoutSignal()
+    conn = http.client.HTTPSConnection(
+        preset.host, timeout=remaining(), context=sslctx.build_context()
+    )
+    try:
+        conn_ms = _connect(conn, start, remaining)
+        response = _send(conn, preset.path, body, headers, conn_ms, remaining)
+        raw = _read_body(conn, response, conn_ms, remaining)
+        infer_ms = (time.monotonic() - start) * 1000.0 - conn_ms
+        return int(getattr(response, "status", 0)), raw, conn_ms, infer_ms
+    finally:
+        conn.close()
+
+
+def _connect(conn: object, start: float, remaining: Callable[[], float]) -> float:
+    import socket
+    import ssl
+
+    try:
+        conn.connect()  # type: ignore[attr-defined]
+    except socket.timeout as exc:  # noqa: UP041 - not a TimeoutError alias until 3.10
+        raise _TimeoutSignal() from exc
+    except (OSError, ssl.SSLError) as exc:
+        raise _ConnectErrorSignal() from exc
+    sock = getattr(conn, "sock", None)
+    if sock is not None:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    conn_ms = (time.monotonic() - start) * 1000.0
+    if remaining() <= 0:
+        raise _TimeoutSignal(conn_ms)
+    return conn_ms
+
+
+def _arm(conn: object, conn_ms: float, remaining: Callable[[], float]) -> None:
+    left = remaining()
+    if left <= 0:
+        raise _TimeoutSignal(conn_ms)
+    sock = getattr(conn, "sock", None)
+    if sock is not None:
+        sock.settimeout(left)
+
+
+def _send(
+    conn: object,
+    path: str,
+    body: bytes,
+    headers: Mapping[str, str],
+    conn_ms: float,
+    remaining: Callable[[], float],
+) -> object:
     import http.client
     import socket
     import ssl
 
-    from . import sslctx
-
-    def _remaining() -> float:
-        return deadline_s - (time.monotonic() - start)
-
-    if _remaining() <= 0:
-        raise _TimeoutSignal()
-
-    context = sslctx.build_context()
-    conn = http.client.HTTPSConnection(preset.host, timeout=_remaining(), context=context)
     try:
-        try:
-            conn.connect()
-        except socket.timeout as exc:  # noqa: UP041 - not a TimeoutError alias until 3.10
-            raise _TimeoutSignal() from exc
-        except (OSError, ssl.SSLError) as exc:
-            raise _ConnectErrorSignal() from exc
+        _arm(conn, conn_ms, remaining)
+        conn.request("POST", path, body=body, headers=dict(headers))  # type: ignore[attr-defined]
+        _arm(conn, conn_ms, remaining)
+        return conn.getresponse()  # type: ignore[attr-defined]
+    except socket.timeout as exc:  # noqa: UP041
+        raise _TimeoutSignal(conn_ms) from exc
+    except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
+        raise _ConnectErrorSignal(conn_ms) from exc
 
-        sock = conn.sock
-        if sock is not None:
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-        connected = time.monotonic()
-        conn_ms = (connected - start) * 1000.0
-        remaining = _remaining()
-        if remaining <= 0:
-            raise _TimeoutSignal(conn_ms)
-        if sock is not None:
-            sock.settimeout(remaining)
+def _read_body(
+    conn: object, response: object, conn_ms: float, remaining: Callable[[], float]
+) -> bytes:
+    import http.client
+    import socket
+    import ssl
 
-        try:
-            conn.request("POST", preset.path, body=body, headers=dict(headers))
-            response = conn.getresponse()
-            raw = response.read()
-        except socket.timeout as exc:  # noqa: UP041 - not a TimeoutError alias until 3.10
-            raise _TimeoutSignal(conn_ms) from exc
-        except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
-            raise _ConnectErrorSignal(conn_ms) from exc
-
-        infer_ms = (time.monotonic() - connected) * 1000.0
-        return response.status, raw, conn_ms, infer_ms
-    finally:
-        conn.close()
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        while True:
+            _arm(conn, conn_ms, remaining)
+            chunk = response.read(_READ_CHUNK)  # type: ignore[attr-defined]
+            if not chunk:
+                return b"".join(chunks)
+            total += len(chunk)
+            if total > _MAX_BODY_BYTES:
+                raise _TooLargeSignal(conn_ms)
+            chunks.append(chunk)
+    except socket.timeout as exc:  # noqa: UP041
+        raise _TimeoutSignal(conn_ms) from exc
+    except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
+        raise _ConnectErrorSignal(conn_ms) from exc
 
 
 def _evaluate(
@@ -323,6 +359,8 @@ def _evaluate(
         return _failure("timeout", conn_ms=exc.conn_ms)
     except _ConnectErrorSignal as exc:
         return _failure("connect_error", conn_ms=exc.conn_ms)
+    except _TooLargeSignal as exc:
+        return _failure("response_too_large", conn_ms=exc.conn_ms)
 
     breaker.record(status, time.time())
     return _finish(status, raw, questions, conn_ms, infer_ms)
@@ -344,109 +382,6 @@ def evaluate(
         raise
     except Exception as exc:  # noqa: BLE001 - fail-open: never propagate, never leak exc content
         return _failure(f"exception:{type(exc).__name__}")
-
-
-class Breaker:
-    """Circuit breaker persisted at `paths.verdict_home() / "breaker.json"`
-    (task-3-brief.md). Three consecutive HTTP 429 responses open it for
-    `_BREAKER_OPEN_SECONDS`; any 200 resets the consecutive count. Never
-    raises: a missing, corrupt, or unwritable state file behaves as closed.
-
-    `path` is an optional override for tests; production code always uses
-    the default (`paths.verdict_home()`, itself `VERDICT_HOME`-overridable),
-    resolved lazily on every call rather than cached at construction, the
-    same way every other module in this package reads it.
-    """
-
-    def __init__(self, path: Path | None = None) -> None:
-        self._path = path
-
-    def _resolve_path(self) -> Path:
-        if self._path is not None:
-            return self._path
-        return paths.verdict_home() / _BREAKER_FILENAME
-
-    def _read(self) -> dict[str, object]:
-        import json
-
-        try:
-            text = self._resolve_path().read_text(encoding="utf-8")
-            parsed = json.loads(text)
-        except (OSError, ValueError):
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-
-    def _write(self, data: Mapping[str, object]) -> None:
-        import json
-
-        try:
-            target = self._resolve_path()
-            paths.ensure_private_dir(target.parent, allow_symlink=True)
-            text = json.dumps(dict(data), separators=(",", ":"))
-            fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _BREAKER_FILE_MODE)
-            try:
-                os.fchmod(fd, _BREAKER_FILE_MODE)
-                os.write(fd, text.encode("utf-8"))
-            finally:
-                os.close(fd)
-        except OSError:
-            pass  # never raises: an unwritable state file behaves as closed
-
-    def is_open(self, now: float) -> bool:
-        try:
-            data = self._read()
-            open_until = data.get("open_until")
-            return isinstance(open_until, (int, float)) and now < open_until
-        except Exception:  # noqa: BLE001 - never raises (task-3-brief.md)
-            return False
-
-    def record(self, status: int, now: float) -> None:
-        try:
-            data = self._read()
-            consecutive = data.get("consecutive_429")
-            consecutive = consecutive if isinstance(consecutive, int) else 0
-            if status == 429:
-                consecutive += 1
-                open_until: object = data.get("open_until", 0)
-                if consecutive >= _BREAKER_THRESHOLD:
-                    open_until = now + _BREAKER_OPEN_SECONDS
-                self._write({"consecutive_429": consecutive, "open_until": open_until})
-            elif status == 200:
-                self._write({"consecutive_429": 0, "open_until": data.get("open_until", 0)})
-        except Exception:  # noqa: BLE001 - never raises (task-3-brief.md)
-            return
-
-
-class RecordedTransport:
-    """Matches a request by the sha256 of its canonical body and replays the
-    recorded `answers`, `model_returned`, and `usage` from
-    `tests/fixtures/cassettes/<sha>.json`. Raises `MissingCassette(sha)`
-    when nothing matches -- never opens a socket (task-3-brief.md)."""
-
-    def __init__(self, cassette_dir: Path) -> None:
-        self._cassette_dir = cassette_dir
-
-    def __call__(
-        self, host: str, path: str, body_bytes: bytes, headers: Mapping[str, str]
-    ) -> tuple[int, bytes, float, float]:
-        import hashlib
-        import json
-
-        sha = hashlib.sha256(body_bytes).hexdigest()
-        cassette_path = self._cassette_dir / f"{sha}.json"
-        try:
-            text = cassette_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise MissingCassette(sha) from exc
-
-        cassette = json.loads(text)
-        response_body = {
-            "model": cassette.get("model_returned"),
-            "answers": cassette.get("answers"),
-            "usage": cassette.get("usage"),
-        }
-        raw = json.dumps(response_body).encode("utf-8")
-        return 200, raw, 0.0, 0.0
 
 
 __all__ = [

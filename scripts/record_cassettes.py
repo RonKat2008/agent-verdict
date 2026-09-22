@@ -27,10 +27,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "plugin" / "hooks"))
+from agent_verdict.verdict_hot import provider, sslctx
 
-from verdict_hot import provider, sslctx  # noqa: E402
+ROOT = Path(__file__).resolve().parents[1]
 
 GOLDEN_STATES = ROOT / "tests" / "golden" / "states"
 GOLDEN_QUESTIONS = ROOT / "tests" / "golden" / "questions"
