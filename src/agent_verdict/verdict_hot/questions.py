@@ -1,4 +1,5 @@
-"""The Stop question set (PLAN.md 5.3, D-010, C2, C9; task-2-brief.md).
+"""The Stop question set (PLAN.md 5.3, D-010, D-031, C2, C9; task-2-brief.md,
+fix round 1, fix round 2).
 
 `build_questions` reads a `state` dict (as `state.build_state` returns it)
 and produces exactly the questions PLAN 5.3's table describes, one request
@@ -69,11 +70,22 @@ def _score(statement: str, levels: tuple[str, ...]) -> dict[str, object]:
     }
 
 
+_MAX_LISTED_SEQS = 8
+
+
 def _step_phrase(seqs: tuple[int, ...]) -> tuple[str, str]:
-    """Returns (`"step 17"` or `"steps 17 and 23"`, matching verb "is"/"are")."""
+    """Returns (a step-number phrase, matching verb "is"/"are"). Lists at
+    most `_MAX_LISTED_SEQS` numbers, then "and N more steps" for the rest
+    (fix round 2, D-031: C9 documents counting as a weakness, so a long
+    list is capped and the remainder is a literal count instead of asking
+    the model to count past the cap)."""
     numbers = [str(seq) for seq in seqs]
     if len(numbers) == 1:
         return f"step {numbers[0]}", "is"
+    if len(numbers) > _MAX_LISTED_SEQS:
+        shown = numbers[:_MAX_LISTED_SEQS]
+        more = len(numbers) - _MAX_LISTED_SEQS
+        return "steps " + ", ".join(shown) + f", and {more} more steps", "are"
     if len(numbers) == 2:
         return f"steps {numbers[0]} and {numbers[1]}", "are"
     return "steps " + ", ".join(numbers[:-1]) + f", and {numbers[-1]}", "are"

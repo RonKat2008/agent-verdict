@@ -183,6 +183,33 @@ def test_negative_or_non_digit_excerpt_keys_never_become_softfail_questions() ->
     assert "softfail_-3" not in result
 
 
+# --- D-031: state + questions headroom under the model's context ----------
+
+
+@pytest.mark.parametrize("name,span,final_message", FIXTURES, ids=[f[0] for f in FIXTURES])
+def test_state_and_questions_together_stay_under_20000_tokens(
+    name: str, span: Span, final_message: str
+) -> None:
+    """D-031: `state.max_tokens` (16,000) is sized to leave headroom for the
+    question set under the served model's 32,000-token context -- this
+    documents that headroom argument directly. `state` alone may use up to
+    `max_tokens`, but `state` plus `questions` together, at the same
+    chars/3 estimate, must stay comfortably under 20,000 for every golden
+    fixture (real state+questions on the `overflow`/`over_budget` fixtures
+    are far smaller than this, since only `overflow`'s state approaches the
+    cap at all)."""
+    claim_tuple = claims_mod.extract_claims(final_message, POLICY)
+    result, _overflow = state.build_state(span, final_message, claim_tuple, POLICY)
+    qs = questions.build_questions(result)
+
+    combined_chars = len(json.dumps(result, ensure_ascii=False)) + len(
+        json.dumps(qs, ensure_ascii=False)
+    )
+    tokens = combined_chars // 3
+
+    assert tokens <= 20000, f"{name}: {tokens} tokens"
+
+
 # --- Golden equality -------------------------------------------------------
 
 

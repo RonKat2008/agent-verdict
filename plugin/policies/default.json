@@ -167,7 +167,7 @@
   },
   "state": {
     "target_tokens": 4000,
-    "max_tokens": 22000,
+    "max_tokens": 16000,
     "excerpt_head": 200,
     "excerpt_tail": 600
   }

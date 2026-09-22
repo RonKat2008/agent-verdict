@@ -159,7 +159,7 @@ def _tiny_state_policy(policy: Policy, target_tokens: int, max_tokens: int) -> P
 
 
 def test_stage1_drops_oldest_plain_ok_steps_first(default_policy: Policy) -> None:
-    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=22000)
+    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=16000)
     steps = tuple(_step(seq, command=f"echo filler line number {seq}" * 3) for seq in range(1, 11))
     span = _span(steps=steps)
 
@@ -173,7 +173,7 @@ def test_stage1_drops_oldest_plain_ok_steps_first(default_policy: Policy) -> Non
 
 
 def test_error_check_softfail_survive_stage1_and_stage2(default_policy: Policy) -> None:
-    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=22000)
+    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=16000)
     big_excerpt = "line of output\n" * 200
     steps = (
         *(_step(seq, command=f"filler {seq}" * 5) for seq in range(1, 20)),
@@ -194,7 +194,7 @@ def test_error_check_softfail_survive_stage1_and_stage2(default_policy: Policy) 
 
 
 def test_stage3_truncates_user_task_keeping_the_tail(default_policy: Policy) -> None:
-    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=22000)
+    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=16000)
     prompts = ("x" * 3000, "the important correction at the end")
     span = _span(steps=(), prompts=prompts)
 
@@ -247,7 +247,7 @@ def test_stage2_shortening_alone_sets_overflow(default_policy: Policy) -> None:
     """fix round 1 item 3: overflow is true as soon as anything is
     shortened, even when no step is ever dropped (target so small stage 1
     has nothing plain-ok to drop, but stage 2 still shrinks the excerpt)."""
-    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=22000)
+    tiny = _tiny_state_policy(default_policy, target_tokens=1, max_tokens=16000)
     big_excerpt = "line of output\n" * 200
     span = _span(
         steps=(_step(1, status="error", out_excerpt=big_excerpt),),

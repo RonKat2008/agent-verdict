@@ -31,7 +31,7 @@ def test_load_policy_falls_back_to_packaged_default(isolated_verdict_home: Path)
     assert policy.claims.max_claims == 6
     assert "implemented" in policy.claims.success_verbs
     assert policy.state.target_tokens == 4000
-    assert policy.state.max_tokens == 22000
+    assert policy.state.max_tokens == 16000
     assert policy.state.excerpt_head == 200
     assert policy.state.excerpt_tail == 600
 
@@ -48,7 +48,7 @@ def test_load_policy_user_override_may_omit_state_section(isolated_verdict_home:
     policy = policy_mod.load_policy()
 
     assert policy.state.target_tokens == 4000
-    assert policy.state.max_tokens == 22000
+    assert policy.state.max_tokens == 16000
 
 
 def test_load_policy_finds_packaged_default_via_cli_layout(isolated_verdict_home: Path) -> None:
