@@ -1,4 +1,4 @@
-.PHONY: setup check test test-fast sync-hot gen-redact capture-fixtures bench-provider clean
+.PHONY: setup check test test-fast sync-hot gen-redact capture-fixtures bench-provider bench-hook e2e-cheap plugin-validate doctor clean
 
 setup:
 	uv sync
@@ -33,6 +33,18 @@ capture-fixtures:
 
 bench-provider:
 	uv run python scripts/smoke_jev.py --n $(or $(N),30) --provider openrouter --provider typesafe --json
+
+bench-hook:
+	uv run python scripts/bench_hook.py --n $(or $(N),40)
+
+e2e-cheap:
+	uv run python scripts/e2e_cheap.py
+
+plugin-validate:
+	claude plugin validate ./plugin --strict
+
+doctor:
+	uv run verdict doctor
 
 clean:
 	rm -rf .mypy_cache .ruff_cache .pytest_cache dist
