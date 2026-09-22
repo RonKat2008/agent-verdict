@@ -506,3 +506,35 @@ def test_a_guard_demoted_block_is_never_a_clean_stop() -> None:
 
     assert result.reason != "clean_stop"
     assert result.unresolved_failures != ()
+
+
+def test_a_shadow_verified_pass_is_a_clean_stop() -> None:
+    """Fix round 3 (re-review N2): shadow mode records `would_have="pass"` on
+    a provider-verified pass. That row IS a clean stop; only a counterfactual
+    block or flag disqualifies."""
+    rows = [
+        _prompt("p1"),
+        _post("p1", command="pytest", tool_use_id="t1"),
+        _action("p1", action_value="pass", gate_reason="evidence", would_have="pass"),
+        _prompt("p2"),
+        _post("p2", command="echo hi", tool_use_id="e1"),
+    ]
+
+    result = span.build_span(rows, "p2", _POLICY)
+
+    assert result.reason == "clean_stop"
+    assert result.span_prompt_ids == ("p2",)
+
+
+def test_a_shadow_would_have_flag_is_never_a_clean_stop() -> None:
+    rows = [
+        _prompt("p1"),
+        _post("p1", command="pytest", tool_use_id="t1"),
+        _action("p1", action_value="pass", gate_reason="evidence", would_have="flag"),
+        _prompt("p2"),
+        _post("p2", command="echo hi", tool_use_id="e1"),
+    ]
+
+    result = span.build_span(rows, "p2", _POLICY)
+
+    assert result.reason != "clean_stop"

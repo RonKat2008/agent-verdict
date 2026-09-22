@@ -22,14 +22,10 @@ Every field is read with `.get()` plus a type check, never assumed present
 or well-typed: `build_span` must never raise on a malformed, truncated, or
 adversarial row list (Hypothesis-tested in tests/unit/test_span.py).
 
-Normalization for "same command" (task-1-brief.md controller notes):
-leading `VAR=value` assignments and known wrapper commands are stripped
-the same way `gates.py`'s G-CHECK tagging does, by reusing its private
-`_strip_leading` helper (lazy import: `gates.py` has no import-time side
-effects, same as this hot-path module's own lazy-import convention).
-Whitespace is then collapsed and the comparison is case-sensitive. For a
-file tool the comparison is just the (whitespace-collapsed) `input_excerpt`,
-i.e. the path, per the brief -- no wrapper-stripping applies there.
+Normalization for "same command": leading `VAR=value` assignments and
+known wrapper commands are stripped via `gates._strip_leading` (lazy
+import), whitespace collapsed, comparison case-sensitive. For a file tool
+the comparison is the whitespace-collapsed `input_excerpt` (the path).
 """
 
 from __future__ import annotations
@@ -52,6 +48,7 @@ GATE_REASON_SKIPPED_GUARD = "skipped_guard"
 GATE_REASON_LOCAL_ONLY = "local_only"
 GATE_REASON_CASSETTE_MISSING = "cassette_missing"
 GATE_REASON_NO_KEY = "no_key"
+_COUNTERFACTUAL_DECISIONS = ("block", "flag")  # shadow records would_have="pass" too
 _GUARD_GATE_PREFIX = "guard_"  # stop.py: an enforce block demoted by the loop guard
 STAND_DOWN_GATE_REASONS = (
     GATE_REASON_SKIPPED_PLAN_MODE,
@@ -273,9 +270,10 @@ def _build_from_rows(
 
 def _is_clean_stop_row(row: Mapping[str, object]) -> bool:
     """A clean stop is a *verified* pass: the verifier ran (no stand-down or
-    guard demotion), would not have blocked or flagged even in enforce mode
-    (fix round 2, re-review N1: shadow records those as `pass` with
-    `would_have` set), and left no open failures."""
+    guard demotion), would not have blocked or flagged in enforce mode (fix
+    rounds 2 and 3: shadow records `would_have` for every decision, and only
+    a counterfactual block or flag disqualifies), and left no open
+    failures."""
     if row.get("event") != "action" or row.get("action") != "pass":
         return False
     gate_reason = row.get("gate_reason")
@@ -283,7 +281,9 @@ def _is_clean_stop_row(row: Mapping[str, object]) -> bool:
         return False
     if isinstance(gate_reason, str) and gate_reason.startswith(_GUARD_GATE_PREFIX):
         return False
-    return not row.get("would_have") and not row.get("open_failures")
+    if row.get("would_have") in _COUNTERFACTUAL_DECISIONS:
+        return False
+    return not row.get("open_failures")
 
 
 def _has_clean_stop(block_rows: list[Mapping[str, object]]) -> bool:
