@@ -1,18 +1,43 @@
-"""Gate G1.2: cold-start latency for `plugin/hooks/run.sh` (task-6-brief.md).
+"""Gate G1.2: cold-start latency for `plugin/hooks/run.sh` (docs/DECISIONS.md D-029).
 
 Spawns the real POSIX launcher once per timed run, per fixture family (the
 six M1 hook events), under a temp `VERDICT_HOME`. 5 warm-up runs per family
 are discarded before p50/p95 are computed over `--n` measured runs (default
-40). Exits 1 if any family's p50 exceeds 60 ms or p95 exceeds 120 ms
-(PLAN.md G1.2). Runs once for the default interpreter (`VERDICT_PYTHON`
-left unset, so `run.sh` falls back to `python3` on PATH) and again for
-`/usr/bin/python3` when it exists, unless `--python` pins a single
-interpreter.
+40). Exits 1 if any family's p50 exceeds 75 ms or p95 exceeds 150 ms
+(D-029, which superseded the plan's un-measured 60/120 ms once the actual
+interpreter-start-plus-launcher floor was measured). Runs once for the
+default interpreter (`VERDICT_PYTHON` left unset, so `run.sh` falls back to
+`python3` on PATH) and again for `/usr/bin/python3` when it exists, unless
+`--python` pins a single interpreter. Each interpreter pass also prints the
+bare `python3 -S -c pass` p50 as "floor" beside every event's numbers
+(D-029: "must report the bare-interpreter floor beside each number so the
+fixed cost is visible").
 
 `percentile`, `summarize_timings`, and `gate_failures` are pure and unit
 tested with injected timings (no subprocess) in `tests/test_bench_hook.py`.
-Every subprocess call below passes both `stdin=subprocess.DEVNULL` and an
-explicit `timeout=` (anti-hang rule, task-6-brief.md controller notes).
+
+Every subprocess call below passes an explicit `timeout=` (anti-hang rule)
+and either `stdin=subprocess.DEVNULL` (the floor probe, which reads no
+input) or `input=<fixture bytes>` (every `run.sh` invocation) -- nothing
+here ever inherits the caller's terminal stdin.
+
+`stdout`/`stderr` are captured (`capture_output=True`) rather than sent to
+`subprocess.DEVNULL`. This is not cosmetic: when `input=` makes `stdin` a
+pipe and a `timeout=` is given, CPython's `Popen.communicate()` can only
+detect the child's exit by `select()`-ing for EOF on `stdout`/`stderr` --
+if those are `DEVNULL` (no pipe to select on) it falls back to
+`Popen.wait()`'s exponential-backoff polling loop (0.5 ms doubling to a
+50 ms cap) to notice the exit, instead of returning the instant the child's
+own pipes close. That backoff added a flat, run-independent ~18-20 ms to
+*every* measured invocation regardless of the event's actual cost --
+confirmed by an isolated `subprocess.run` comparison (`DEVNULL` + timeout
+vs `capture_output=True` + timeout, same command, same machine, same
+timeout value) -- which is exactly what produced a flat ~77-78 ms profile
+across every event, including `session-start`, which does none of the
+work `post`/`post-fail`/`stop` do. Capturing `stdout`/`stderr` too lets
+`select()` see the pipe-close EOF directly, matching a direct
+`subprocess.run(..., capture_output=True)` call with no timeout at all to
+within a few ms.
 """
 
 from __future__ import annotations
@@ -45,8 +70,11 @@ FIXTURE_FAMILIES: tuple[tuple[str, str], ...] = (
 WARMUPS = 5
 DEFAULT_N = 40
 SUBPROCESS_TIMEOUT_S = 5.0
-P50_MAX_MS = 60.0
-P95_MAX_MS = 120.0
+# D-029 (docs/DECISIONS.md): measured on the development machine after the
+# perf commit, interpreter start plus the shell wrapper is ~30-38ms of fixed
+# cost that a 60/120ms budget never accounted for.
+P50_MAX_MS = 75.0
+P95_MAX_MS = 150.0
 _USR_BIN_PYTHON3 = "/usr/bin/python3"
 
 
@@ -84,8 +112,7 @@ def _time_one_invocation(event_arg: str, payload: bytes, env: dict[str, str]) ->
     subprocess.run(
         [str(RUN_SH), event_arg],
         input=payload,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        capture_output=True,
         env=env,
         timeout=SUBPROCESS_TIMEOUT_S,
         check=False,
@@ -97,6 +124,31 @@ def run_family(event_arg: str, payload: bytes, env: dict[str, str], n: int) -> l
     for _ in range(WARMUPS):
         _time_one_invocation(event_arg, payload, env)
     return [_time_one_invocation(event_arg, payload, env) for _ in range(n)]
+
+
+def _time_bare_interpreter(python_path: str | None) -> float:
+    """One `python3 -S -c pass` invocation, timed the same way as a hook."""
+    start = time.perf_counter()
+    subprocess.run(
+        [python_path or "python3", "-S", "-c", "pass"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=SUBPROCESS_TIMEOUT_S,
+        check=False,
+    )
+    return (time.perf_counter() - start) * 1000.0
+
+
+def measure_floor(python_path: str | None, n: int) -> float:
+    """D-029's "bare-interpreter floor": p50 of `python3 -S -c pass` alone.
+
+    Same warm-up/measured-run shape as `run_family`, so it is directly
+    comparable to the event timings printed beside it.
+    """
+    for _ in range(WARMUPS):
+        _time_bare_interpreter(python_path)
+    timings = [_time_bare_interpreter(python_path) for _ in range(n)]
+    return percentile(timings, 50)
 
 
 def _strip_dev_venv_from_path(path_value: str) -> str:
@@ -133,6 +185,7 @@ def _interpreter_passes() -> list[tuple[str, str | None]]:
 
 def bench_one_interpreter(label: str, python_path: str | None, n: int) -> list[EventTiming]:
     print(f"=== {label} ===")
+    floor_p50 = measure_floor(python_path, n)
     results: list[EventTiming] = []
     with tempfile.TemporaryDirectory(prefix="verdict-bench-") as home_dir:
         env = _build_env(Path(home_dir), python_path)
@@ -140,7 +193,10 @@ def bench_one_interpreter(label: str, python_path: str | None, n: int) -> list[E
             payload = (FIXTURES_DIR / fixture_name).read_bytes()
             timings = run_family(event_arg, payload, env, n)
             timing = summarize_timings(event_arg, timings)
-            print(f"{timing.event}: p50={timing.p50:.1f}ms p95={timing.p95:.1f}ms (n={n})")
+            print(
+                f"{timing.event}: p50={timing.p50:.1f}ms p95={timing.p95:.1f}ms "
+                f"(n={n}, floor={floor_p50:.1f}ms)"
+            )
             results.append(timing)
     return results
 
