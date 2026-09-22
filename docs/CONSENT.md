@@ -23,19 +23,32 @@ All of the above is redacted (see `docs/PRIVACY.md` for the redactor's measured 
 and false-positive rate) and truncated before it is written anywhere, including to your
 own disk.
 
-**Never-send list.** Certain paths are never recorded or sent at all: `.env*` files, PEM
-and key files, SSH keys and the `.ssh` directory, cloud credential files
-(`~/.aws/credentials`, kubeconfig, service-account JSON, and similar), package-manager
-credential files (`.npmrc`, `.netrc`, `.pypirc`, `.git-credentials`), and Terraform state
-and variable files. A match on this list means nothing about that file or command is
-recorded (`docs/PLAN.md` section 5.1, `docs/DECISIONS.md` D-017).
+**Never-send list.** The contents and paths of certain files are never recorded or sent at
+all: `.env*` files, PEM and key files, SSH keys and the `.ssh` directory, cloud credential
+files (`~/.aws/credentials`, kubeconfig, service-account JSON, and similar),
+package-manager credential files (`.npmrc`, `.netrc`, `.pypirc`, `.git-credentials`), and
+Terraform state and variable files (`docs/PLAN.md` section 5.1, `docs/DECISIONS.md`
+D-017). The check looks at every path-shaped field of a tool call, including the ones MCP
+servers use, not only the built-in tools' `file_path`.
+
+A match does not remove the row. The row is still written and marked `never_send: true`,
+and it still records the tool name, the tool call's id (`tool_use_id`), whether the call
+was a check (`is_check`), how long it took (`duration_ms`), and a hash of the working
+directory (`cwd_hash`) — enough to know that a tool ran. Every piece of content and every
+path on that row is replaced by the literal string `[never-send]`.
 
 ## What leaves this machine
 
-**In this version, nothing leaves your machine.** `agent-verdict` v0.1 is a collector: it
-writes to your local ledger under `~/.verdict` and makes no network calls from its
-recording hooks. This is a deliberate design choice for M1, not a temporary limitation
-of a beta.
+**In this version, no recorded data leaves your machine.** `agent-verdict` v0.1 is a
+collector: it writes to your local ledger under `~/.verdict`, and the recording path makes
+no network calls at all. This is a deliberate design choice for M1, not a temporary
+limitation of a beta.
+
+One exception, which you trigger yourself and which sends none of your data: `verdict
+doctor` opens a TLS connection to `openrouter.ai` and `api.typesafe.ai` to report whether
+each provider is reachable. No ledger content and no API key is sent, but your machine's
+IP address is exposed to those two hosts. Run `verdict doctor --no-probe` to skip the
+check and make the command network-free.
 
 **From M2 onward, this changes for verification.** When Verdict verifies a stop, it will
 send a redacted, truncated summary of that turn (your prompt, the commands run, short
@@ -79,15 +92,27 @@ even in derived form, do not opt in.
 
 ## The redactor's limits, stated plainly
 
-The redactor is a best-effort regex tool, not a guarantee. Across a set of held-out
-probes run by a reviewer against fresh secret material, measured recall was 0.889,
-0.967, 0.960, and 0.974, with a final held-out pass at 1.000 recall, 0.000 evidence-text
-false-positive rate, and 0.27 opaque-token over-redaction (`.superpowers/sdd/2026-09-21-m1-collector/task-2-report.md`).
-On the low end of that band, assume roughly 1 in 30 secrets could survive redaction and
-reach your local ledger. Treat anything the collector might see the same way you would
-treat a plaintext file on your own disk: if you would not want a credential sitting
-there unencrypted, rotate it after it appears in a command or output, whether or not you
-believe it was redacted.
+The redactor is a best-effort regex tool, not a guarantee. Across four held-out probes run
+by a reviewer against fresh secret material — a new set each round, kept from the person
+writing the redactor — measured recall was **0.889, 0.967, 0.960, and 0.974**, with an
+evidence-text false-positive rate of 0.011 on the fourth. That same fourth probe was later
+**re-run** after the fixes made against it and measured 1.000 recall and 0.000
+evidence-text false-positive rate; since the fixes targeted that exact set, it was no
+longer held out, so treat the 1.000 as a regression check rather than a fresh result. All
+of it is written down in
+[`docs/measurements/redaction-heldout-2026-09-21.md`](measurements/redaction-heldout-2026-09-21.md).
+
+Measured recall on fresh held-out sets is **0.96 to 0.97** on the last three probes:
+assume roughly **1 in 30 secrets could survive** redaction and reach your local ledger.
+Two limits are known and accepted: an all-lowercase hyphenated passphrase used as a
+password value is not redacted, and a value shaped exactly like a Stripe *publishable*
+key under an ordinary key name survives on purpose. Treat anything the collector might see
+the same way you would treat a plaintext file on your own disk: if you would not want a
+credential sitting there unencrypted, rotate it after it appears in a command or output,
+whether or not you believe it was redacted.
+
+If the redactor itself throws while processing a field, the row is still written with that
+field replaced by `[redaction failed]`; the unredacted text is never written.
 
 ---
 

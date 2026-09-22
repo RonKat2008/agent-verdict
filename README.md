@@ -5,7 +5,9 @@ which commands ran, whether they succeeded or failed, and what the assistant sai
 end of the turn. It writes this into a local, append-only ledger on your own machine, so
 you can later check whether a session's final message matched what its tools actually
 did. It does this through Claude Code's own hooks, with no separate service to run and,
-in this version, no network calls at all.
+in this version, no network calls from the recording path at all. (The one command that
+does touch the network is `verdict doctor`, and only to check provider reachability —
+see below.)
 
 **Status: v0.1 collector. Records locally, sends nothing.**
 
@@ -48,8 +50,12 @@ date range: 2026-09-21T14:02:11+00:00 .. 2026-09-21T18:47:03+00:00
 `verdict doctor` diagnoses the local environment: interpreter resolution, data
 directory, plugin registration, provider reachability, and key presence. It exits 0 with
 zero provider keys configured; the provider and key lines are informational only.
-Example, captured on the development machine
-(`.superpowers/sdd/2026-09-21-m1-collector/task-6-report.md`):
+
+The reachability line is the only network call anywhere in this version: it opens a TLS
+connection to `openrouter.ai` and `api.typesafe.ai`, sending no ledger data and no API
+key, but exposing your machine's IP address to those two hosts. Run `verdict doctor
+--no-probe` to skip it and keep the command entirely offline. Example, captured on the
+development machine:
 
 ```
 $ uv run verdict doctor
@@ -68,6 +74,11 @@ key ANTHROPIC_API_KEY: absent (informational)
 
 Set `VERDICT_DISABLE=1` in your environment to stop all recording immediately. It is
 checked before any other work, in every hook.
+
+The plugin's `mode` option does the same thing persistently: `mode: off` is read before
+anything else is imported, so nothing at all is written — not even a hook log line.
+`shadow` (the default) records everything and never blocks; `enforce` is reserved for a
+later version and records exactly like `shadow` today.
 
 ## Measured overhead
 
@@ -107,5 +118,7 @@ coverage that does not depend on a model call.
 - [`docs/PLAN.md`](docs/PLAN.md): the full design and milestone plan.
 - [`docs/PRIVACY.md`](docs/PRIVACY.md): what is stored, what is (and is not yet) sent,
   and the redactor's measured numbers.
+- [`docs/measurements/redaction-heldout-2026-09-21.md`](docs/measurements/redaction-heldout-2026-09-21.md):
+  the held-out redaction probes behind those numbers.
 - [`docs/CONSENT.md`](docs/CONSENT.md): what a contributor to the study is agreeing to,
   and how to pause, stop, purge, or revoke.
