@@ -178,6 +178,8 @@ class Policy(NamedTuple):
     state: StatePolicy
     stop: StopPolicy
     provider: ProviderPolicy
+    denylist: tuple[str, ...]
+    denylist_ids: tuple[str, ...]
 
 
 _REQUIRED_TOP_KEYS = (
@@ -193,6 +195,8 @@ _REQUIRED_TOP_KEYS = (
     "state",
     "stop",
     "provider",
+    "denylist",
+    "denylist_ids",
 )
 
 
@@ -360,6 +364,15 @@ def _build_state(raw: Mapping[str, Any]) -> StatePolicy:
     )
 
 
+def _build_denylist(raw: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """`denylist` regexes paired by position with `denylist_ids` (rules.py)."""
+    patterns = _str_tuple(raw["denylist"], "denylist")
+    ids = _str_tuple(raw["denylist_ids"], "denylist_ids")
+    if len(patterns) != len(ids):
+        raise PolicyError("denylist and denylist_ids must have the same length")
+    return patterns, ids
+
+
 def _build_policy(raw: Mapping[str, Any]) -> Policy:
     for key in _REQUIRED_TOP_KEYS:
         if key not in raw:
@@ -376,6 +389,7 @@ def _build_policy(raw: Mapping[str, Any]) -> Policy:
         state = _build_state(raw["state"])
         stop = _build_stop(raw["stop"])
         provider = _build_provider(raw["provider"])
+        denylist, denylist_ids = _build_denylist(raw)
     except (TypeError, ValueError, KeyError) as exc:
         raise PolicyError(f"malformed policy field: {exc}") from exc
 
@@ -392,4 +406,6 @@ def _build_policy(raw: Mapping[str, Any]) -> Policy:
         state=state,
         stop=stop,
         provider=provider,
+        denylist=denylist,
+        denylist_ids=denylist_ids,
     )

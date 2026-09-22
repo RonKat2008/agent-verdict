@@ -24,6 +24,19 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|Write|Edit|NotebookEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh",
+            "args": ["pre"],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "^(Bash|Write|Edit|NotebookEdit|WebFetch|Agent|mcp__.*)$",

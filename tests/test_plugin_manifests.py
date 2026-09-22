@@ -16,8 +16,9 @@ M1_EVENTS = {
     "Stop",
     "SessionEnd",
 }
-M2_EVENTS = M1_EVENTS | {"SubagentStop"}
+M2_EVENTS = M1_EVENTS | {"SubagentStop", "PreToolUse"}
 POST_MATCHER = "^(Bash|Write|Edit|NotebookEdit|WebFetch|Agent|mcp__.*)$"
+PRE_MATCHER = "^(Bash|Write|Edit|NotebookEdit)$"
 
 
 def test_hooks_json_registers_exactly_the_m1_and_m2_events_in_exec_form() -> None:
@@ -34,11 +35,14 @@ def test_hooks_json_registers_exactly_the_m1_and_m2_events_in_exec_form() -> Non
     assert hooks["PostToolUse"][0]["matcher"] == POST_MATCHER
     assert hooks["PostToolUseFailure"][0]["matcher"] == "*"
     assert hooks["SubagentStop"][0]["matcher"] == "*"
+    assert hooks["PreToolUse"][0]["matcher"] == PRE_MATCHER
     for event in ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"):
         assert "matcher" not in hooks[event][0]
     # task-4-brief.md: Stop and SubagentStop both get a 15s timeout.
     assert hooks["Stop"][0]["hooks"][0]["timeout"] == 15
     assert hooks["SubagentStop"][0]["hooks"][0]["timeout"] == 15
+    # task-5-brief.md: PreToolUse gets a tight 3s timeout (it fails closed).
+    assert hooks["PreToolUse"][0]["hooks"][0]["timeout"] == 3
 
 
 def test_plugin_manifest_fields() -> None:

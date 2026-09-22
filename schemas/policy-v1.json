@@ -16,7 +16,9 @@
     "thresholds",
     "state",
     "stop",
-    "provider"
+    "provider",
+    "denylist",
+    "denylist_ids"
   ],
   "properties": {
     "policy_version": { "type": "string" },
@@ -136,6 +138,10 @@
       }
     },
     "denylist": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "denylist_ids": {
       "type": "array",
       "items": { "type": "string" }
     }

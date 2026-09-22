@@ -46,6 +46,20 @@ default, an import failure, a closed stdout pipe). The call site wraps it
 in its own `try/except Exception`, so a failure there degrades to the same
 `(session_id, "exception", err_class)` outcome the rest of `_handle`
 already uses, instead of propagating out of `main` and exiting non-zero.
+
+Task 5 (task-5-brief.md, controller notes): argv event `"pre"` (hooks.json's
+`args: ["pre"]` on the PreToolUse entry) is routed to `_handle_pre` instead
+of `_handle`, entirely before `_handle` is ever reached -- this is the one
+hook path that fails CLOSED. `_handle_pre` wraps `_run_pre` in its own
+`try/except Exception`, isolated from every other event's fail-open
+`try/except` in `_handle`: an internal exception there (a corrupt user
+policy, a bug in `rules.decide`, a ledger write failure) writes one stderr
+line and returns exit code 2 with no stdout, instead of degrading to an
+`"exception"` outcome and exit 0 the way every other event does. A
+PreToolUse payload that merely fails to *parse* is not treated as an
+internal exception: `_run_pre` catches `parsers.ParseError` itself and
+returns 0, so a shape Claude Code has not sent yet exits quietly rather
+than blocking the tool call.
 """
 
 from __future__ import annotations
@@ -59,6 +73,7 @@ if TYPE_CHECKING:
 
 _MAX_STDIN_BYTES = 5 * 1024 * 1024
 _MODE_OFF = "off"
+_PRE_EVENT_NAME = "pre"
 
 
 def main(argv: list[str]) -> int:
@@ -79,9 +94,66 @@ def main(argv: list[str]) -> int:
 
     logsafe.install_excepthook()
 
+    if event == _PRE_EVENT_NAME:
+        return _handle_pre(start)
+
     session_id, outcome, err_class = _handle(start)
     total_ms = (time.monotonic() - start) * 1000.0
     logsafe.log_invocation(event, session_id, outcome, total_ms, err_class)
+    return 0
+
+
+def _handle_pre(start: float) -> int:
+    """The PreToolUse rules gate entry point. Fails CLOSED (module
+    docstring, task-5-brief.md): any exception from `_run_pre` -- not just
+    the ones `_run_pre` itself anticipates -- becomes exit 2 with a single
+    stderr line, never exit 0. Kept as its own `try/except`, never merged
+    into `_handle`'s, so a bug here can never quietly degrade to that
+    function's fail-open outcome instead."""
+    try:
+        return _run_pre(start)
+    except Exception as exc:  # noqa: BLE001 - fail-closed contract (task-5-brief.md)
+        sys.stderr.write(f"Verdict rules gate failed ({type(exc).__name__})\n")
+        return 2
+
+
+def _run_pre(start: float) -> int:
+    """Parse, decide, record, and (maybe) print -- for one PreToolUse call.
+
+    A payload that isn't PreToolUse-shaped (`parsers.ParseError`) is not an
+    internal error: it exits 0 with empty stdout, same as any tool call the
+    rules gate has no opinion on. Everything past that point (a broken
+    user policy, `rules.decide`, the ledger write) is allowed to raise
+    straight through to `_handle_pre`'s fail-closed wrapper -- in
+    particular, `policy.load_policy()` here does NOT fall back to the
+    packaged default the way `_run_stop` does: a corrupt override on the
+    one path that fails closed must surface as exit 2, not silently run
+    with a policy the user never wrote (controller notes ruling 8).
+    """
+    import time
+
+    from verdict_hot import logsafe, parsers, rules
+    from verdict_hot import policy as policy_mod
+
+    payload = _read_stdin_json(_MAX_STDIN_BYTES)
+    if not isinstance(payload, dict):
+        return 0
+
+    try:
+        event = parsers.parse_pre_event(payload)
+    except parsers.ParseError:
+        return 0
+
+    active_policy = policy_mod.load_policy()
+    decision = rules.decide(event.tool_name, event.tool_input, active_policy, event.cwd)
+    rules.record_pre_row(event, decision, time.time())
+
+    stdout_json = rules.build_output_json(decision)
+    if stdout_json is not None:
+        sys.stdout.write(stdout_json)
+
+    total_ms = (time.monotonic() - start) * 1000.0
+    logsafe.log_invocation(_PRE_EVENT_NAME, event.session_id, "ok", total_ms)
     return 0
 
 

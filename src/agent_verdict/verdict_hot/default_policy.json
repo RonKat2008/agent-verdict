@@ -190,15 +190,27 @@
     "breaker_open_s": 600
   },
   "denylist": [
-    "\\brm\\s+(-[a-zA-Z]*[rf][a-zA-Z]*\\s+)+(/|~|\\$HOME)\\s*$",
-    "\\bgit\\s+push\\s+(--force|-f)\\b[^\\n]*\\b(main|master|prod|production|release)\\b",
-    "\\bgit\\s+clean\\s+(-[a-zA-Z]*[fdx]){2,}\\b",
+    "\\brm\\b",
+    "\\bgit\\s+push\\b",
+    "(?s)(?=.*\\bgit\\s+clean\\b)(?=.*(?:-[a-zA-Z]*f[a-zA-Z]*\\b|--force\\b))(?=.*-[a-zA-Z]*[dx][a-zA-Z]*\\b)",
     "\\bdd\\b[^\\n]*\\bof=/dev/",
     "\\bmkfs(\\.\\w+)?\\b",
-    "\\bchmod\\s+-R\\s+777\\s+/\\s*$",
+    "(?s)(?=.*\\bchmod\\b)(?=.*-R\\b)(?=.*\\b777\\b)(?=.*(?:(?<=\\s)|^)/(?:(?=\\s)|$))",
     "\\bcurl\\b[^\\n]*\\|\\s*(sudo\\s+)?(sh|bash|zsh)\\b",
     "\\bwget\\b[^\\n]*\\|\\s*(sudo\\s+)?(sh|bash|zsh)\\b",
-    "\\bDROP\\s+DATABASE\\b",
-    "\\bTRUNCATE\\s+TABLE\\b"
+    "(?i)\\bDROP\\s+DATABASE\\b",
+    "(?i)\\bTRUNCATE\\b(?:\\s+TABLE)?\\b"
+  ],
+  "denylist_ids": [
+    "deny_rm_root",
+    "deny_force_push_protected",
+    "deny_git_clean",
+    "deny_raw_device_write",
+    "deny_mkfs",
+    "deny_chmod_root",
+    "deny_pipe_to_shell",
+    "deny_pipe_to_shell",
+    "deny_db_drop",
+    "deny_db_truncate"
   ]
 }

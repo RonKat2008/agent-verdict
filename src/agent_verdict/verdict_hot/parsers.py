@@ -15,8 +15,13 @@ were never observed on any captured fixture (G14) and M1's event interfaces
 below do not carry them -- `cc_effort` is therefore always written as `null`
 by `recorders.build_row` for M1's `session_start` rows.
 
-`PreToolUse` is out of scope for M2 Task 4 (`rules.py`'s PreToolUse gate is
-a later task); `parse_event` raises `ParseError("hook_event_name")` for it.
+`PreToolUse` is out of scope for `parse_event`/`recorders.record` (M1's
+six-event dispatch, and the `pre` ledger event those never write): it still
+raises `ParseError("hook_event_name")` there, so `recorders.record` keeps
+returning `"skipped"` for it exactly as before Task 5. `parse_pre_event` is
+the separate, `pre`-only parser Task 5's `rules.py` gate calls directly from
+`verdict_hook.py`'s `pre` branch -- kept out of `_DISPATCH` so the M1 dispatch
+table and `recorders.py` never have to know PreToolUse exists.
 
 `SubagentStop` (task-4-brief.md, controller notes ruling 12) parses
 identically to `Stop` -- G7's captured fixture shows the same
@@ -94,6 +99,20 @@ class StopEvent(NamedTuple):
 class SessionEndEvent(NamedTuple):
     common: Common
     reason: str
+
+
+class PreEvent(NamedTuple):
+    """Task 5: PreToolUse, parsed by `parse_pre_event` only (never through
+    `parse_event`/`_DISPATCH`; see module docstring)."""
+
+    session_id: str
+    prompt_id: str | None
+    agent_id: str | None
+    tool_name: str
+    tool_use_id: str
+    tool_input: Mapping[str, object]
+    cwd: str
+    permission_mode: str | None
 
 
 HookEvent = Union[  # noqa: UP007 - `X | Y` at runtime is 3.10+-only; this must run on 3.9
@@ -260,6 +279,30 @@ def parse_event(payload: Mapping[str, object]) -> HookEvent:
     """
     try:
         return _parse_event_unsafe(payload)
+    except ParseError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - contract: only ParseError escapes
+        raise ParseError("payload") from exc
+
+
+def _parse_pre_event_unsafe(payload: Mapping[str, object]) -> PreEvent:
+    return PreEvent(
+        session_id=_require_nonempty_str(payload, "session_id"),
+        prompt_id=_optional_str(payload, "prompt_id"),
+        agent_id=_optional_str(payload, "agent_id"),
+        tool_name=_require_nonempty_str(payload, "tool_name"),
+        tool_use_id=_require_nonempty_str(payload, "tool_use_id"),
+        tool_input=_require_mapping(payload, "tool_input"),
+        cwd=_require_nonempty_str(payload, "cwd"),
+        permission_mode=_optional_str(payload, "permission_mode"),
+    )
+
+
+def parse_pre_event(payload: Mapping[str, object]) -> PreEvent:
+    """Parse a PreToolUse payload for `rules.py`. Raises only `ParseError`,
+    same two-outcome contract as `parse_event` (module docstring)."""
+    try:
+        return _parse_pre_event_unsafe(payload)
     except ParseError:
         raise
     except Exception as exc:  # noqa: BLE001 - contract: only ParseError escapes

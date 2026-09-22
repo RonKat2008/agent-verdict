@@ -67,6 +67,12 @@ FIXTURE_FAMILIES: tuple[tuple[str, str], ...] = (
     ("session-end", "session_end.json"),
 )
 
+# task-5-brief.md, controller notes ruling 7: the M2 PreToolUse rules gate,
+# benchmarked separately via `--event pre` rather than folded into
+# FIXTURE_FAMILIES/G1.2 -- its own budget is 60ms p50 (tested with 30 runs
+# in tests/integration/test_pre_hook.py), not G1.2's 75/150ms.
+EXTRA_FAMILIES: dict[str, str] = {"pre": "pre_tool_use_bash.json"}
+
 WARMUPS = 5
 DEFAULT_N = 40
 SUBPROCESS_TIMEOUT_S = 5.0
@@ -209,11 +215,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--python", type=str, default=None, help="run only against this interpreter path"
     )
+    parser.add_argument(
+        "--event",
+        type=str,
+        default=None,
+        choices=sorted(EXTRA_FAMILIES),
+        help="benchmark one extra (non-G1.2) family instead, e.g. the PreToolUse rules gate",
+    )
     return parser
+
+
+def bench_one_extra_family(event_arg: str, fixture_name: str, n: int) -> None:
+    payload = (FIXTURES_DIR / fixture_name).read_bytes()
+    for label, python_path in _interpreter_passes():
+        with tempfile.TemporaryDirectory(prefix="verdict-bench-") as home_dir:
+            env = _build_env(Path(home_dir), python_path)
+            timings = run_family(event_arg, payload, env, n)
+            timing = summarize_timings(event_arg, timings)
+            print(
+                f"[{label}] {timing.event}: p50={timing.p50:.1f}ms p95={timing.p95:.1f}ms (n={n})"
+            )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+
+    if args.event:
+        bench_one_extra_family(args.event, EXTRA_FAMILIES[args.event], args.n)
+        return 0
 
     passes = [(args.python, args.python)] if args.python else _interpreter_passes()
 
