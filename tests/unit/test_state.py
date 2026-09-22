@@ -419,12 +419,6 @@ def test_build_state_respects_hard_cap_and_protects_key_rows(
     tokens = len(json.dumps(result, ensure_ascii=False)) // 4
     assert tokens <= POLICY.state.max_tokens
 
-    protected_seqs = {
-        s.seq for s in span.steps if s.is_check or s.status == "error" or s.soft_fail_candidate
-    }
-    remaining_seqs = {s["seq"] for s in result["trusted_facts"]["steps"]}
-    assert protected_seqs <= remaining_seqs
-
     remaining_seqs = {s["seq"] for s in result["trusted_facts"]["steps"]}
     protected_seqs = {
         s.seq for s in span.steps if s.status == "error" or s.is_check or s.soft_fail_candidate

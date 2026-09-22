@@ -296,7 +296,14 @@ def _our_stop_responses(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def assert_stop_hook_responses_clean(events: list[dict[str, Any]]) -> None:
     """Every Stop hook_response that carries our decision JSON exited 0 with
     outcome "success" and wrote nothing to stderr (the Stop output
-    contract: exit 0 always, stdout is the decision, stderr silent)."""
+    contract: exit 0 always, stdout is the decision, stderr silent).
+
+    This only sees the responses that printed a decision: a pass and a
+    crash both have empty stdout, and the envelope carries no plugin id
+    (Task 7 review, Important 1). `assert_our_stop_hooks_ran_clean` is the
+    check that catches a silently failing Stop hook of ours, from data that
+    is ours: the ledger and hook.log.
+    """
     for event in _our_stop_responses(events):
         if event.get("exit_code") != 0 or event.get("outcome") != "success" or event.get("stderr"):
             raise AssertionFailure(
@@ -304,6 +311,40 @@ def assert_stop_hook_responses_clean(events: list[dict[str, Any]]) -> None:
                 f"exit_code={event.get('exit_code')!r} outcome={event.get('outcome')!r} "
                 f"stderr={str(event.get('stderr'))[:200]!r}"
             )
+
+
+_STOP_LOG_EVENTS = ("stop", "subagent-stop")
+
+
+def assert_our_stop_hooks_ran_clean(verdict_home: Path, rows: list[dict[str, Any]]) -> None:
+    """Our own record of every Stop invocation (hook.log, one JSON line per
+    run) must show outcome != "exception" with no err_class, and every
+    `stop` ledger row must be followed by an `action` row (the verifier
+    wrote its result). Unlike the stream envelope, both files are ours and
+    name our events, so a crashed or cancelled Verdict Stop hook cannot
+    hide behind an empty stdout."""
+    log_path = verdict_home / "hook.log"
+    stop_runs = 0
+    if log_path.exists():
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("event") not in _STOP_LOG_EVENTS:
+                continue
+            stop_runs += 1
+            if entry.get("outcome") == "exception" or entry.get("err_class"):
+                raise AssertionFailure(f"a Verdict Stop hook run failed: {entry!r}")
+    stop_rows = sum(1 for r in rows if r.get("event") == "stop")
+    action_rows = sum(1 for r in rows if r.get("event") == "action")
+    if stop_runs == 0 or stop_rows == 0:
+        raise AssertionFailure("no Verdict Stop hook run was recorded (hook.log / ledger)")
+    if action_rows < stop_rows:
+        raise AssertionFailure(
+            f"{stop_rows} stop row(s) but only {action_rows} action row(s): "
+            "a verifier run wrote no result"
+        )
 
 
 def load_ledger_rows(verdict_home: Path) -> list[dict[str, Any]]:
@@ -379,8 +420,11 @@ def _print_failure_debug(
     print(f"e2e-cheap {scenario} FAILED: {exc}", file=sys.stderr)
     print(f"--- claude exit code: {result.returncode} ---", file=sys.stderr)
     debug_dir = Path(tempfile.gettempdir())
-    (debug_dir / f"verdict-e2e-{scenario}-stdout.log").write_text(result.stdout)
-    (debug_dir / f"verdict-e2e-{scenario}-stderr.log").write_text(result.stderr)
+    for name, text in (("stdout", result.stdout), ("stderr", result.stderr)):
+        target = debug_dir / f"verdict-e2e-{scenario}-{name}.log"
+        fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
     print(f"--- full stdout/stderr saved under {debug_dir} ---", file=sys.stderr)
     print(f"--- {len(rows)} ledger row(s) recorded ---", file=sys.stderr)
     for row in rows:
@@ -473,6 +517,7 @@ def run_stop_scenario(scenario: str) -> int:
             assert_no_hook_error_text(result.stdout, expect_block=(scenario == "stop-block"))
             assert_stop_hook_responses_clean(events)
             rows = load_ledger_rows(verdict_home)
+            assert_our_stop_hooks_ran_clean(verdict_home, rows)
             assert_fn(events, rows)
         except AssertionFailure as exc:
             rows = load_ledger_rows(verdict_home)
