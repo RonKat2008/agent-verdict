@@ -134,7 +134,7 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
             if isinstance(would_have, str):
                 would_have_by_kind[would_have] = would_have_by_kind.get(would_have, 0) + 1
 
-        elif event == "verdict" and row.get("transport", "live") != "live":
+        elif event == "verdict" and row.get("transport", "unknown") != "live":
             non_live_verdicts += 1  # final review I5: cassette/fake answers are visible in stats
 
         if row.get("never_send") is True:

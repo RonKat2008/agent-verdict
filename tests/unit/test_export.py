@@ -44,6 +44,7 @@ def _verdict_row(session_id: str, **extra: object) -> dict[str, object]:
         "conn_ms": 1.0,
         "infer_ms": 2.0,
         "policy_version": "2026.09.1",
+        "transport": "live",
     }
     row.update(extra)
     return row
@@ -322,6 +323,9 @@ def test_non_live_verdict_rows_are_skipped_and_counted(
     ledger.append_row(_verdict_row("s1", transport="cassette"))
     ledger.append_row(_verdict_row("s1", transport="fake", question_key="claims_check_passed"))
     ledger.append_row(_verdict_row("s1", transport="live", question_key="completion"))
+    unstamped = _verdict_row("s1", question_key="claims_done")
+    unstamped.pop("transport", None)
+    ledger.append_row(unstamped)  # written before provenance was recorded: not exported
     ledger.append_row(_action_row("s1"))
     out_path = tmp_path / "goldset.jsonl"
 
@@ -331,4 +335,4 @@ def test_non_live_verdict_rows_are_skipped_and_counted(
     lines = [line for line in out_path.read_text(encoding="utf-8").splitlines() if line]
     assert len(lines) == 1
     assert json.loads(lines[0])["question_key"] == "completion"
-    assert "skipped_non_live=2" in capsys.readouterr().err
+    assert "skipped_non_live=3" in capsys.readouterr().err

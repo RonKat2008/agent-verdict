@@ -2,8 +2,9 @@
 (task-6-brief.md ruling 1; PLAN.md 5.5, the replay contract).
 
 For each stored `action` row that carries a judgement (`_render.is_judged_action`: a real
-provider evaluation -- stand-downs, `gate_unavailable`, and the
-`always_verify` path with no real evidence are all skipped and counted),
+provider evaluation, whether gated by evidence, forced by `always_verify`,
+or demoted by the loop guard; stand-downs, `gate_unavailable`, and
+exceptions are skipped and counted),
 `replay` reconstructs the same inputs `stop.py` used to call
 `verdict_policy.decide` and recomputes it under a given policy:
 

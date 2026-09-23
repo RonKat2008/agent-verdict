@@ -185,7 +185,7 @@ def _export_session(
         if event == "verdict":
             if key not in pending_verdicts:
                 verdict_start[key] = idx
-            if row.get("transport", "live") != "live":
+            if row.get("transport", "unknown") != "live":  # unstamped rows are never exported
                 skipped_non_live[0] += (
                     1  # final review I5: never export replayed or injected answers
                 )

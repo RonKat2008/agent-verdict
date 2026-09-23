@@ -154,7 +154,7 @@
           "conn_ms": { "type": "number" },
           "infer_ms": { "type": "number" },
           "policy_version": { "type": "string" },
-          "transport": { "enum": ["live", "cassette", "fake"] },
+          "transport": { "enum": ["live", "cassette", "fake", "unknown"] },
           "listed_failures": { "type": "array" }
         }
       }

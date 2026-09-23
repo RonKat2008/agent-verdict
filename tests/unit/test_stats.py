@@ -235,9 +235,9 @@ def test_non_live_verdict_rows_are_counted(cli_verdict_home: Path) -> None:
     ledger.append_row({**base, "transport": "cassette"})
     ledger.append_row({**base, "transport": "fake"})
     ledger.append_row({**base, "transport": "live"})
-    ledger.append_row(base)  # pre-stamp rows count as live
+    ledger.append_row(base)  # pre-stamp rows have unknown provenance: non-live
 
     result = stats.compute_stats()
 
-    assert result.non_live_verdicts == 2
-    assert result.to_dict()["non_live_verdicts"] == 2
+    assert result.non_live_verdicts == 3
+    assert result.to_dict()["non_live_verdicts"] == 3
