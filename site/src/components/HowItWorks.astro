@@ -1,0 +1,109 @@
+---
+import HooksFlow from './HooksFlow.astro';
+
+interface Column {
+  step: string;
+  title: string;
+  body: string;
+}
+
+const COLUMNS: Column[] = [
+  {
+    step: '01',
+    title: 'Record',
+    body: 'Hooks write every tool call, result, and exit code to a local ledger. Nothing leaves your machine.',
+  },
+  {
+    step: '02',
+    title: 'Judge',
+    body: "At Stop, a redacted summary of the turn goes to TypeSafe's Jev model with a fixed set of typed questions. Answers are numbers.",
+  },
+  {
+    step: '03',
+    title: 'Decide',
+    body: 'Policy rules R1 to R4 turn those numbers plus the recorded facts into pass, flag, or block. Shadow mode records; enforce mode acts.',
+  },
+];
+---
+
+<section class="how-it-works" id="how-it-works" aria-labelledby="how-it-works-heading">
+  <div class="container">
+    <h2 id="how-it-works-heading">How it works</h2>
+
+    <div class="columns">
+      {
+        COLUMNS.map((col) => (
+          <div class="column">
+            <span class="step-number mono" aria-hidden="true">
+              {col.step}
+            </span>
+            <h3>{col.title}</h3>
+            <p>{col.body}</p>
+          </div>
+        ))
+      }
+    </div>
+
+    <div class="flow-diagram" tabindex="0" role="region" aria-label="Hook flow diagram, scrollable">
+      <HooksFlow />
+    </div>
+  </div>
+</section>
+
+<style>
+  .how-it-works {
+    padding-block: var(--space-8);
+    border-top: 1px solid #1d2127;
+  }
+
+  .how-it-works h2 {
+    font-size: clamp(1.6rem, 1rem + 2vw, 2.2rem);
+  }
+
+  .columns {
+    margin-top: var(--space-7);
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-6);
+  }
+
+  @media (max-width: 768px) {
+    .columns {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .column {
+    padding: var(--space-5);
+    background: #101317;
+    border: 1px solid #1d2127;
+    border-radius: var(--radius);
+    position: relative;
+  }
+
+  .step-number {
+    color: var(--accent);
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+  }
+
+  .column h3 {
+    margin-top: var(--space-3);
+    font-size: 1.15rem;
+  }
+
+  .column p {
+    margin-top: var(--space-3);
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  .flow-diagram {
+    margin-top: var(--space-7);
+    padding: var(--space-5);
+    background: #101317;
+    border: 1px solid #1d2127;
+    border-radius: var(--radius);
+    overflow-x: auto;
+  }
+</style>

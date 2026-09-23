@@ -1,0 +1,124 @@
+---
+import numbers from '../data/numbers.json';
+
+const REPO_URL = 'https://github.com/RonKat2008/agent-verdict';
+
+interface NumberRow {
+  id: string;
+  label: string;
+  value: number;
+  unit: string;
+  source_command: string;
+  measured_on: string;
+  note?: string;
+}
+
+const rows = numbers as NumberRow[];
+
+function formatValue(row: NumberRow): string {
+  const value = Number.isInteger(row.value) ? String(row.value) : row.value.toFixed(2);
+  return row.unit ? `${value} ${row.unit}` : value;
+}
+---
+
+<section class="numbers" id="numbers" aria-labelledby="numbers-heading">
+  <div class="container">
+    <h2 id="numbers-heading">Numbers</h2>
+
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Measured numbers, scrollable">
+      <table class="numbers-table mono">
+        <thead>
+          <tr>
+            <th scope="col">Metric</th>
+            <th scope="col">Value</th>
+            <th scope="col">Source</th>
+            <th scope="col">Measured</th>
+          </tr>
+        </thead>
+        <tbody>
+          {
+            rows.map((row) => (
+              <tr>
+                <th scope="row">{row.label}</th>
+                <td>{formatValue(row)}</td>
+                <td>
+                  <code>{row.source_command}</code>
+                </td>
+                <td>{row.measured_on}</td>
+              </tr>
+            ))
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <p class="numbers-note">
+      Precision and recall are reported only after the labeled study, at the sample size that
+      supports them. None appear here yet.
+      {' '}
+      <a href={`${REPO_URL}/blob/main/docs/DECISIONS.md#d-018`}>docs/DECISIONS.md#d-018</a>
+    </p>
+  </div>
+</section>
+
+<style>
+  .numbers {
+    padding-block: var(--space-8);
+    border-top: 1px solid #1d2127;
+  }
+
+  .numbers h2 {
+    font-size: clamp(1.6rem, 1rem + 2vw, 2.2rem);
+  }
+
+  .table-wrap {
+    margin-top: var(--space-6);
+    overflow-x: auto;
+    border: 1px solid #1d2127;
+    border-radius: var(--radius);
+  }
+
+  .numbers-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  .numbers-table th,
+  .numbers-table td {
+    text-align: left;
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid #1d2127;
+    white-space: nowrap;
+  }
+
+  .numbers-table thead th {
+    color: var(--muted);
+    font-weight: 500;
+    border-top: none;
+    font-family: var(--font-sans);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+  }
+
+  .numbers-table tbody th {
+    color: var(--text);
+    font-weight: 500;
+    white-space: normal;
+  }
+
+  .numbers-table td {
+    color: var(--muted);
+  }
+
+  .numbers-table code {
+    color: var(--text);
+  }
+
+  .numbers-note {
+    margin-top: var(--space-5);
+    max-width: 70ch;
+    color: var(--muted);
+  }
+</style>

@@ -1,0 +1,139 @@
+---
+/**
+ * Inline SVG of the hook flow named in the spec, in order: SessionStart ->
+ * UserPromptSubmit -> PreToolUse gate -> tool -> PostToolUse /
+ * PostToolUseFailure -> ledger -> Stop -> span -> Jev -> rules -> decision.
+ * Hand-drawn coordinates (not computed from a shared layout engine): this
+ * is a fixed, eleven-node diagram, not a general-purpose renderer, so the
+ * plan's "many small files, no speculative abstraction" bar is met by
+ * keeping the geometry inline rather than building one for a single caller.
+ */
+
+interface Node {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  lines: string[];
+}
+
+const ROW1_Y = 18;
+const ROW2_Y = 138;
+const BOX_H = 44;
+
+const row1: Node[] = [
+  { x: 10, y: ROW1_Y, w: 140, h: BOX_H, lines: ['SessionStart'] },
+  { x: 168, y: ROW1_Y, w: 152, h: BOX_H, lines: ['UserPromptSubmit'] },
+  { x: 338, y: ROW1_Y, w: 140, h: BOX_H, lines: ['PreToolUse gate'] },
+  { x: 496, y: ROW1_Y, w: 84, h: BOX_H, lines: ['tool'] },
+  { x: 598, y: ROW1_Y, w: 232, h: BOX_H, lines: ['PostToolUse /', 'PostToolUseFailure'] },
+  { x: 848, y: ROW1_Y, w: 104, h: BOX_H, lines: ['ledger'] },
+];
+
+const row2: Node[] = [
+  { x: 40, y: ROW2_Y, w: 110, h: BOX_H, lines: ['Stop'] },
+  { x: 220, y: ROW2_Y, w: 110, h: BOX_H, lines: ['span'] },
+  { x: 400, y: ROW2_Y, w: 110, h: BOX_H, lines: ['Jev'] },
+  { x: 580, y: ROW2_Y, w: 110, h: BOX_H, lines: ['rules'] },
+  { x: 760, y: ROW2_Y, w: 160, h: BOX_H, lines: ['decision'] },
+];
+
+function centerX(n: Node): number {
+  return n.x + n.w / 2;
+}
+function centerY(n: Node): number {
+  return n.y + n.h / 2;
+}
+
+function rowArrows(row: Node[]): Array<{ x1: number; x2: number; y: number }> {
+  const arrows: Array<{ x1: number; x2: number; y: number }> = [];
+  for (let i = 0; i < row.length - 1; i += 1) {
+    arrows.push({ x1: row[i].x + row[i].w, x2: row[i + 1].x, y: centerY(row[i]) });
+  }
+  return arrows;
+}
+
+const row1Arrows = rowArrows(row1);
+const row2Arrows = rowArrows(row2);
+
+const lastRow1 = row1[row1.length - 1];
+const firstRow2 = row2[0];
+const elbowMidY = lastRow1.y + lastRow1.h + (firstRow2.y - (lastRow1.y + lastRow1.h)) / 2;
+const elbowPath = `M ${centerX(lastRow1)} ${lastRow1.y + lastRow1.h} V ${elbowMidY} H ${centerX(
+  firstRow2,
+)} V ${firstRow2.y}`;
+---
+
+<svg
+  class="hooks-flow"
+  viewBox="0 0 960 200"
+  role="img"
+  aria-label="SessionStart, then UserPromptSubmit, then the PreToolUse gate, then a tool call, then PostToolUse or PostToolUseFailure, into the ledger, into Stop, over the verification span, to Jev, through the policy rules, to a decision."
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <defs>
+    <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)" />
+    </marker>
+  </defs>
+
+  {row1.map((n) => (
+    <g>
+      <rect x={n.x} y={n.y} width={n.w} height={n.h} rx="4" class="node-box" />
+      {n.lines.map((line, i) => (
+        <text
+          x={centerX(n)}
+          y={centerY(n) + (n.lines.length > 1 ? (i === 0 ? -3 : 11) : 4)}
+          class="node-label"
+        >
+          {line}
+        </text>
+      ))}
+    </g>
+  ))}
+
+  {row2.map((n) => (
+    <g>
+      <rect x={n.x} y={n.y} width={n.w} height={n.h} rx="4" class="node-box" />
+      <text x={centerX(n)} y={centerY(n) + 4} class="node-label">
+        {n.lines[0]}
+      </text>
+    </g>
+  ))}
+
+  {row1Arrows.map((a) => (
+    <line x1={a.x1} y1={a.y} x2={a.x2 - 6} y2={a.y} class="edge" marker-end="url(#arrowhead)" />
+  ))}
+  {row2Arrows.map((a) => (
+    <line x1={a.x1} y1={a.y} x2={a.x2 - 6} y2={a.y} class="edge" marker-end="url(#arrowhead)" />
+  ))}
+
+  <path d={elbowPath} class="edge" fill="none" marker-end="url(#arrowhead)" />
+</svg>
+
+<style>
+  .hooks-flow {
+    width: 100%;
+    height: auto;
+    max-width: 960px;
+  }
+
+  .node-box {
+    fill: #101317;
+    stroke: var(--muted);
+    stroke-width: 1;
+  }
+
+  .node-label {
+    fill: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    text-anchor: middle;
+  }
+
+  .edge {
+    stroke: var(--muted);
+    stroke-width: 1.5;
+    fill: none;
+  }
+</style>

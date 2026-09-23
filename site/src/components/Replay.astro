@@ -33,10 +33,17 @@ function nameFromPath(modulePath: string): string {
   return modulePath.split('/').pop()?.replace(/\.json$/, '') ?? modulePath;
 }
 
+// `build_replays.py` also writes a manifest `index.json` (a bare array of
+// scenario names) alongside the bundles in `data/scenarios/`, and the glob
+// above matches it too -- skip anything whose name isn't a known scenario
+// rather than feeding a non-bundle shape into `parseBundle`.
+const KNOWN_SCENARIOS: readonly string[] = SCENARIO_ORDER;
 const byName = new Map<string, Bundle>();
 for (const [modulePath, mod] of Object.entries(sourceModules)) {
+  const name = nameFromPath(modulePath);
+  if (!KNOWN_SCENARIOS.includes(name)) continue;
   const bundle = parseBundle(mod.default);
-  byName.set(nameFromPath(modulePath), bundle);
+  byName.set(name, bundle);
 }
 
 // Tab order is `SCENARIO_ORDER` (mirrors `replay_schema.SCENARIO_ORDER`),

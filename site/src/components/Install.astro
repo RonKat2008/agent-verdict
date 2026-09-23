@@ -1,0 +1,217 @@
+---
+const REPO_URL = 'https://github.com/RonKat2008/agent-verdict';
+
+const INSTALL_LINES = [
+  '/plugin marketplace add RonKat2008/agent-verdict',
+  '/plugin install agent-verdict@agent-verdict',
+];
+
+interface Option {
+  name: string;
+  note: string;
+}
+
+// Wording matches README.md's "Kill switch" and "How it works" sections and
+// docs/PRIVACY.md verbatim -- see the README lines cited in the site's task
+// brief. Not invented here.
+const MODES: Option[] = [
+  { name: 'shadow', note: 'the default -- records what enforce mode would have done, never blocks or prints anything.' },
+  { name: 'enforce', note: 'can block a Stop on strong evidence, or leave a non-blocking note on weaker evidence.' },
+  { name: 'off', note: 'read before anything else is imported, so nothing at all is written, not even a hook log line.' },
+];
+
+const PROVIDERS: Option[] = [
+  { name: 'openrouter', note: 'the default -- Jev served through OpenRouter.' },
+  { name: 'typesafe', note: "Jev direct, TypeSafe's own endpoint." },
+  { name: 'local-only', note: 'turns verification off; recording continues and nothing is ever sent.' },
+];
+
+/**
+ * The four "What changed in v0.2" sentences from docs/PRIVACY.md, copied
+ * verbatim (hard line-wraps joined to single spaces; the lead-in bold
+ * markers around "To keep this local:" removed since this renders as plain
+ * text, not markdown). Do not paraphrase -- if PRIVACY.md's wording
+ * changes, update this array to match, word for word.
+ */
+const PRIVACY_SENTENCES = [
+  'Starting with v0.2, the Stop and SubagentStop hooks send a redacted turn summary to your configured provider (OpenRouter by default) whenever the evidence gate (G-STOP) decides a stop needs judging.',
+  "What this request never carries: anything from a never-send path or command (those rows contribute only their structural fields, per the never-send section below), a full tool output, or file contents beyond what a tool printed inside the short excerpts above (an MCP tool's response body is treated as tool output and excerpted the same way).",
+  "The provider's response is a small set of numeric judgments (`noul` values `0` to `1`, or a fixed-choice string) against a fixed question set — never free text back from the provider that gets stored or shown to you as-is.",
+  "To keep this local: set the plugin's `provider` option (or `~/.verdict/policy.json`'s `provider` field) to `local-only`.",
+];
+
+function escapeHtml(value: string): string {
+  return value.split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;');
+}
+
+/** Renders `` `code` `` spans as <code> after escaping the rest, so the
+ * verbatim sentences above display their inline-code tokens the way the
+ * source markdown intends without going through a markdown parser. */
+function withInlineCode(value: string): string {
+  return escapeHtml(value).replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+---
+
+<section class="install" id="install" aria-labelledby="install-heading">
+  <div class="container">
+    <h2 id="install-heading">Install</h2>
+
+    <pre class="install-block mono"><code>{INSTALL_LINES.join('\n')}</code></pre>
+
+    <div class="options-grid">
+      <div class="option-group">
+        <h3 class="mono">mode</h3>
+        <dl>
+          {
+            MODES.map((opt) => (
+              <div class="option-row">
+                <dt class="mono">{opt.name}</dt>
+                <dd>{opt.note}</dd>
+              </div>
+            ))
+          }
+        </dl>
+      </div>
+
+      <div class="option-group">
+        <h3 class="mono">provider</h3>
+        <dl>
+          {
+            PROVIDERS.map((opt) => (
+              <div class="option-row">
+                <dt class="mono">{opt.name}</dt>
+                <dd>{opt.note}</dd>
+              </div>
+            ))
+          }
+        </dl>
+      </div>
+    </div>
+
+    <div class="privacy">
+      <h3>Privacy</h3>
+      {PRIVACY_SENTENCES.map((sentence) => <p set:html={withInlineCode(sentence)}></p>)}
+    </div>
+
+    <nav class="install-links" aria-label="Project links">
+      <a href={REPO_URL}>Repository</a>
+      <a href={`${REPO_URL}/blob/main/docs/PRIVACY.md`}>PRIVACY.md</a>
+      <a href={`${REPO_URL}/blob/main/docs/CONSENT.md`}>CONSENT.md</a>
+    </nav>
+  </div>
+</section>
+
+<style>
+  .install {
+    padding-block: var(--space-8);
+    border-top: 1px solid #1d2127;
+  }
+
+  .install h2 {
+    font-size: clamp(1.6rem, 1rem + 2vw, 2.2rem);
+  }
+
+  .install-block {
+    margin: var(--space-6) 0 0;
+    padding: var(--space-5);
+    background: #101317;
+    border: 1px solid #1d2127;
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 0.9rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .options-grid {
+    margin-top: var(--space-7);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-7);
+  }
+
+  @media (max-width: 768px) {
+    .options-grid {
+      grid-template-columns: 1fr;
+      gap: var(--space-5);
+    }
+  }
+
+  .option-group h3 {
+    color: var(--accent);
+    font-size: 0.85rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .option-group dl {
+    margin: var(--space-4) 0 0;
+  }
+
+  .option-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-block: var(--space-3);
+    border-top: 1px solid #1d2127;
+  }
+
+  .option-row:first-child {
+    border-top: none;
+  }
+
+  .option-row dt {
+    color: var(--text);
+    font-size: 0.9rem;
+  }
+
+  .option-row dd {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.88rem;
+    line-height: 1.5;
+  }
+
+  .privacy {
+    margin-top: var(--space-7);
+    max-width: 72ch;
+  }
+
+  .privacy h3 {
+    font-size: 1rem;
+  }
+
+  .privacy p {
+    margin-top: var(--space-4);
+    color: var(--muted);
+    line-height: 1.6;
+    font-size: 0.92rem;
+  }
+
+  .privacy p :global(code) {
+    font-family: var(--font-mono);
+    color: var(--text);
+    font-size: 0.86em;
+  }
+
+  .install-links {
+    margin-top: var(--space-6);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-5);
+  }
+
+  .install-links a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.85rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .install-links a:hover,
+  .install-links a:focus-visible {
+    color: var(--accent);
+  }
+</style>

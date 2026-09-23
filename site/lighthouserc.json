@@ -1,0 +1,21 @@
+{
+  "ci": {
+    "collect": {
+      "startServerCommand": "npm run preview -- --port 4321",
+      "startServerReadyPattern": "Local\\s+http://localhost:4321",
+      "startServerReadyTimeout": 30000,
+      "url": ["http://localhost:4321/"],
+      "numberOfRuns": 1
+    },
+    "assert": {
+      "assertions": {
+        "categories:performance": ["error", { "minScore": 0.9 }],
+        "categories:accessibility": ["error", { "minScore": 1 }],
+        "resource-summary:script:size": ["error", { "maxNumericValue": 150000 }]
+      }
+    },
+    "upload": {
+      "target": "temporary-public-storage"
+    }
+  }
+}
