@@ -154,3 +154,44 @@ def test_never_follows_a_symlinked_session_file(home: Path, tmp_path: Path) -> N
 
     assert result.deleted == 0
     assert real_target.exists()
+
+
+def _big_post_rows(session_id: str, total_bytes: int) -> list[dict[str, object]]:
+    filler = "x" * 4000
+    n = total_bytes // 4000 + 1
+    return [_row("post", session_id, tool_name="Bash", out_head=filler) for _ in range(n)]
+
+
+def test_a_stop_row_past_the_first_megabyte_still_protects_the_session(home: Path) -> None:
+    """Final review I2 (D-021): a `stop` row is always near the END of a
+    session, so a prefix-only scan misses it on long sessions and the
+    prune would delete an unlabeled corpus session."""
+    rows = _big_post_rows("s1", 2 * 1024 * 1024) + [_row("stop", "s1")]
+    target = _write_session(home, "s1", rows, age_days=1000)
+
+    assert prune.has_stop_row(target) is True
+    result = prune.prune(_policy_with_retention(45))
+
+    assert result.deleted == 0
+    assert target.exists()
+
+
+def test_an_equally_large_stopless_session_is_still_prunable(home: Path) -> None:
+    rows = _big_post_rows("s2", 2 * 1024 * 1024)
+    target = _write_session(home, "s2", rows, age_days=1000)
+
+    assert prune.has_stop_row(target) is False
+    result = prune.prune(_policy_with_retention(45))
+
+    assert result.deleted == 1
+    assert not target.exists()
+
+
+def test_a_truncated_final_line_is_treated_as_protected(home: Path) -> None:
+    """When in doubt, never prune: an unreadable or truncated tail means
+    we cannot rule out a `stop` row."""
+    target = _write_session(home, "s3", _big_post_rows("s3", 600 * 1024), age_days=1000)
+    with open(target, "ab") as fh:
+        fh.write(b'{"schema_v":1,"session_id":"s3","event":"sto')
+
+    assert prune.has_stop_row(target) is True

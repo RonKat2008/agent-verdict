@@ -41,7 +41,7 @@ _MAX_STAT_CALLS = 200
 _MAX_SECONDS = 0.05
 _MAX_DELETES = 20
 _LABELS_READ_CAP = 1024 * 1024
-_SESSION_READ_CAP = 1024 * 1024
+_SESSION_READ_CAP = 256 * 1024  # head and tail each (final review I2)
 _SECONDS_PER_DAY = 86400
 _LABELS_FILENAME = "labels.jsonl"
 
@@ -80,14 +80,8 @@ def labeled_session_ids() -> frozenset[str]:
     return frozenset(ids)
 
 
-def has_stop_row(path: Path) -> bool:
+def _stop_row_in(data: bytes) -> bool:
     import json
-
-    try:
-        with open(path, "rb") as fh:
-            data = fh.read(_SESSION_READ_CAP)
-    except OSError:
-        return False
 
     for raw_line in data.split(b"\n"):
         line = raw_line.strip()
@@ -100,6 +94,30 @@ def has_stop_row(path: Path) -> bool:
         if isinstance(row, dict) and row.get("event") == "stop":
             return True
     return False
+
+
+def has_stop_row(path: Path) -> bool:
+    """A `stop` row is always near the END of a session (final review I2),
+    so both the head and the tail are scanned, each capped. Any read error
+    or an incomplete final line answers True: when in doubt, never prune
+    (D-021)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(_SESSION_READ_CAP)
+            fh.seek(0, 2)
+            size = fh.tell()
+            tail = b""
+            if size > _SESSION_READ_CAP:
+                fh.seek(max(0, size - _SESSION_READ_CAP))
+                tail = fh.read(_SESSION_READ_CAP)
+                tail = tail[tail.find(b"\n") + 1 :]  # drop the partial first line
+    except OSError:
+        return True
+
+    data = head if not tail else head + b"\n" + tail
+    if data and not data.endswith(b"\n"):
+        return True  # incomplete final line: cannot rule out a stop row
+    return _stop_row_in(data)
 
 
 def _elapsed_over_budget(start: float) -> bool:
