@@ -2,7 +2,7 @@
 
 A Claude Code plugin that catches an agent claiming success its own tool results do not support. It records tool outcomes (including exit codes) from lifecycle hooks, asks TypeSafe's Jev model one batch of typed questions about the final message at Stop time, and applies a versioned policy: pass, flag, or block the stop. It also ships the labeling and evaluation tools behind a published, reproducible calibration study.
 
-**Status (2026-09-20): the owner confirmed `docs/PLAN.md` and every default open decision (D-022). Milestone M0 is built and reviewed. Gates G0.1 to G0.3 passed (G0.2 on 2026-09-21: OpenRouter p90 265 ms, D-025). G0.4 passed on 2026-09-21 (CI green on Linux and macOS) and M0 is tagged `m0`. M1, the collector v0.1, is complete and tagged `m1` (2026-09-22): gates G1.1 to G1.7 passed, 672 tests, final review "ready to merge". The plugin is installed locally for dogfooding. Next is M2, the shadow verifier, on branch `m2`. A development key lives outside the repo in `~/.config/agent-verdict/dev.env` (mode 0600); load it with `set -a; . ~/.config/agent-verdict/dev.env; set +a` and never copy it into the project.** Update this line whenever a milestone is tagged.
+**Status (2026-09-22): M0 tagged `m0` (2026-09-21), M1 tagged `m1` (2026-09-22, collector v0.1, 672 tests). M2, the shadow verifier v0.2, is tagged `m2` (2026-09-22): Stop/SubagentStop verifier with policy rules R1 to R4 and the loop guard, the PreToolUse rules gate, `verdict show|replay|purge|export|policy lint`, gates G2.1 to G2.6 passed (hot-path coverage 94%; live Stop p50 322 ms, p95 474 ms; the staged scenario blocks a false claim and stands down after one block), 1,055 tests, final whole-branch review "ready to tag". `verdict migrate` is deferred to M3 (D-034). The plugin is installed locally for dogfooding in `shadow` mode. Next is M3, labeling and report tooling, on branch `m3`. A development key lives outside the repo in `~/.config/agent-verdict/dev.env` (mode 0600); load it with `set -a; . ~/.config/agent-verdict/dev.env; set +a` and never copy it into the project. Update this line whenever a milestone is tagged.**
 
 ## Read first, in this order of authority
 
@@ -76,12 +76,12 @@ A Claude Code plugin that catches an agent claiming success its own tool results
 - `src/agent_verdict/adapters/transcript_v1.py`: the only code allowed to know the transcript format. Never imported by a hook.
 - Data root: `verdict_home()` returns `$VERDICT_HOME` if set, else `~/.verdict`. No code expands `~/.verdict` directly.
 - Data: `~/.verdict/events/<session_id>.jsonl` (append-only, `schema_v`, 0600), `~/.verdict/labels.jsonl`, `~/.verdict/hook.log`, derived `~/.verdict/index.db`. Not in `CLAUDE_PLUGIN_DATA`, which uninstall deletes.
-- Events registered: SessionStart, UserPromptSubmit, PostToolUse (`^(Bash|Write|Edit|NotebookEdit|WebFetch|Agent|mcp__.*)$`), PostToolUseFailure (`*`), Stop, SessionEnd from M1; PreToolUse (`^(Bash|Write|Edit|NotebookEdit)$`) and SubagentStop from M2. No handler except Stop and SubagentStop ever touches the network.
+- Events registered: SessionStart, UserPromptSubmit, PostToolUse (`^(Bash|Write|Edit|NotebookEdit|WebFetch|Agent|mcp__.*)$`), PostToolUseFailure (`*`), Stop, SessionEnd from M1; PreToolUse (`^(Bash|Write|Edit|NotebookEdit)$`) and SubagentStop from M2 (both shipped). No handler except Stop and SubagentStop ever touches the network.
 - Evidence is gathered over a **verification span** of prompts, because each user prompt has its own `prompt_id` (D-020). `prompt_id` and `agent_id` are stored as explicit `null` when absent.
 - Modes: `off`, `shadow` (default until the pre-registered gate is met), `enforce`. Loop guard: at most 1 block per `(session_id, prompt_id, agent_id)`.
 - Providers: one `SystemOneClient`, presets `openrouter` and `typesafe`. SSL context falls back to the system CA bundle when the default store is empty (one Python on the owner's PATH fails TLS otherwise).
 
-## Commands (none exist yet; the milestone that builds each is in brackets)
+## Commands (the milestone that built each is in brackets; M0 to M2 exist)
 
 ```
 make setup | check | test | test-fast          # [M0] check = ruff, mypy --strict, import-ban and stdlib-shadow test,
