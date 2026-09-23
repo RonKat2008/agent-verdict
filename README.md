@@ -7,6 +7,8 @@
 A Claude Code plugin that records what every tool call actually returned, then checks the
 agent's final message against that record before the turn ends.
 
+**[Watch it catch one →](https://agent-verdict.vercel.app)**
+
 [![CI](https://github.com/RonKat2008/agent-verdict/actions/workflows/ci.yml/badge.svg)](https://github.com/RonKat2008/agent-verdict/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.2.0-informational.svg)](UPGRADING.md)
