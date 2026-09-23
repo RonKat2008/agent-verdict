@@ -67,6 +67,13 @@ def _claude_version() -> str:
     return proc.stdout.strip().split()[0] if proc.stdout.strip() else "unknown"
 
 
+def _allowed_tools(spec: dict[str, Any]) -> str:
+    """`scenario.json` may list `tools`; default is Bash only (the M1/M2
+    e2e default). unbacked-check needs Read and Edit."""
+    tools = spec.get("tools", ["Bash"])
+    return ",".join(str(t) for t in tools)
+
+
 def _run(spec: dict[str, Any], verdict_home: Path, cwd: Path) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["VERDICT_HOME"] = str(verdict_home)
@@ -75,7 +82,7 @@ def _run(spec: dict[str, Any], verdict_home: Path, cwd: Path) -> subprocess.Comp
 
     def runner(model: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            e2e._claude_command(model, str(spec["prompt"]), MAX_TURNS),
+            e2e._claude_command(model, str(spec["prompt"]), MAX_TURNS, _allowed_tools(spec)),
             cwd=str(cwd),
             env=env,
             stdin=subprocess.DEVNULL,

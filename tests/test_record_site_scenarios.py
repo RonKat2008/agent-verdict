@@ -25,7 +25,15 @@ def test_every_scenario_dir_has_a_valid_definition() -> None:
     for name in names:
         spec = json.loads((ROOT / "site" / "scenarios" / name / "scenario.json").read_text())
         assert spec["name"] == name
-        assert set(spec) == {"name", "title", "summary", "prompt", "mode", "staged_claim", "expect"}
+        assert set(spec) - {"tools"} == {
+            "name",
+            "title",
+            "summary",
+            "prompt",
+            "mode",
+            "staged_claim",
+            "expect",
+        }
         assert spec["mode"] in ("shadow", "enforce")
         assert isinstance(spec["staged_claim"], bool)
         assert set(spec["expect"]) == {"action", "rule_id"}
@@ -51,3 +59,11 @@ def test_ledger_writer_refuses_two_sessions(tmp_path: Path) -> None:
     (home / "events" / "s2.jsonl").write_text("{}\n")
     with pytest.raises(RuntimeError):
         rss.copy_ledger(home, tmp_path / "out")
+
+
+def test_unbacked_check_allows_read_and_edit_only() -> None:
+    spec = json.loads(
+        (ROOT / "site" / "scenarios" / "unbacked-check" / "scenario.json").read_text()
+    )
+    assert rss._allowed_tools(spec) == "Read,Edit"
+    assert rss._allowed_tools({"name": "x"}) == "Bash"
