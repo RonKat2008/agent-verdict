@@ -40,6 +40,7 @@ import json
 import os
 import re
 import socket
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -167,8 +168,12 @@ def _export_row(
 
 
 def _export_session(
-    session_id: str, rows: list[dict[str, object]], policy: Policy
+    session_id: str,
+    rows: list[dict[str, object]],
+    policy: Policy,
+    skipped_non_live: list[int] | None = None,
 ) -> list[dict[str, Any]]:
+    skipped_non_live = [0] if skipped_non_live is None else skipped_non_live
     out: list[dict[str, Any]] = []
     pending_verdicts: dict[tuple[object, object], list[dict[str, object]]] = {}
     verdict_start: dict[tuple[object, object], int] = {}
@@ -180,6 +185,11 @@ def _export_session(
         if event == "verdict":
             if key not in pending_verdicts:
                 verdict_start[key] = idx
+            if row.get("transport", "live") != "live":
+                skipped_non_live[0] += (
+                    1  # final review I5: never export replayed or injected answers
+                )
+                continue
             pending_verdicts.setdefault(key, []).append(row)
             continue
 
@@ -209,13 +219,21 @@ def _export_session(
 
 
 def export_goldset(policy: Policy | None = None) -> list[dict[str, Any]]:
+    rows_out, _skipped = export_goldset_counted(policy)
+    return rows_out
+
+
+def export_goldset_counted(policy: Policy | None = None) -> tuple[list[dict[str, Any]], int]:
+    """Rows plus the number of `verdict` rows skipped because their
+    `transport` was not `live` (final review I5)."""
     active_policy = policy or policy_mod.load_policy(policy_mod.default_policy_path())
     rows_out: list[dict[str, Any]] = []
+    skipped = [0]
     for session_path in ledger.iter_sessions():
         session_id = session_path.stem
         rows = ledger.read_session(session_id)
-        rows_out.extend(_export_session(session_id, rows, active_policy))
-    return rows_out
+        rows_out.extend(_export_session(session_id, rows, active_policy, skipped))
+    return rows_out, skipped[0]
 
 
 def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
@@ -262,10 +280,11 @@ def _write_goldset(out_path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    rows = export_goldset()
+    rows, skipped_non_live = export_goldset_counted()
     out_path = Path(args.out)
     _write_goldset(out_path, rows)
     print(f"wrote {len(rows)} row(s) to {out_path}")
+    print(f"skipped_non_live={skipped_non_live}", file=sys.stderr)
     return 0
 
 

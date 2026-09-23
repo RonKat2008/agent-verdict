@@ -1,7 +1,7 @@
 """`verdict replay --policy <file> [--since <date>] [--json]`
 (task-6-brief.md ruling 1; PLAN.md 5.5, the replay contract).
 
-For each stored `action` row whose `gate_reason == "evidence"` (a real
+For each stored `action` row that carries a judgement (`_render.is_judged_action`: a real
 provider evaluation -- stand-downs, `gate_unavailable`, and the
 `always_verify` path with no real evidence are all skipped and counted),
 `replay` reconstructs the same inputs `stop.py` used to call
@@ -50,6 +50,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from agent_verdict._render import is_judged_action
 from agent_verdict.verdict_hot import ledger, verdict_policy
 from agent_verdict.verdict_hot import policy as policy_mod
 from agent_verdict.verdict_hot import span as span_mod
@@ -238,7 +239,7 @@ def _replay_session(
         if since is not None and isinstance(ts, (int, float)) and ts < since:
             skipped += 1
             continue
-        if row.get("gate_reason") != "evidence":
+        if not is_judged_action(row):
             skipped += 1
             continue
 

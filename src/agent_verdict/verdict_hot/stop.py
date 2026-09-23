@@ -5,19 +5,15 @@ exception becomes an `action` row with `action="gate_unavailable"` and empty
 stdout. `now` is the MONOTONIC start captured at hook entry, so the 2.5 s
 Stop budget is spent from hook entry, not from `stop.handle` entry.
 
-Order: stand-down checks (plan mode, background tasks, guard budget spent,
-`_stand_down`) -> verification span -> the G-STOP gate (skip the provider
-when nothing could ever trigger a rule, unless `policy.stop.always_verify`)
--> claims/state/questions/provider selection (`_gate_and_prepare`) -> the
-bounded, retried provider call, `verdict` rows, `decide`, the loop guard,
-and one `action` row (`_call_and_decide`/`_finalize_decision`, using
-`_stop_provider.py`/`verdict_policy.py`/`guard.py`/`_stop_rows.py`).
+Order: stand-down checks (`_stand_down`) -> verification span -> G-STOP
+gate (skip the provider unless evidence or `always_verify`) -> claims,
+state, questions, provider selection (`_gate_and_prepare`) -> bounded,
+retried provider call, `verdict` rows, `decide`, loop guard, one `action`
+row (`_call_and_decide` / `_finalize_decision`).
 
-Output contract (D-016, A8, A16): block is exactly
-`{"decision":"block","reason":...}`; flag is exactly
-`{"systemMessage":"Verdict: ..."}`; pass is nothing. Shadow mode, and a
-SubagentStop when `policy.stop.subagent_block` is false, always resolve to
-`action="pass"` with `would_have` set to what enforce mode would have done.
+Output contract (D-016, A8, A16): block `{"decision":"block","reason":...}`,
+flag `{"systemMessage":"Verdict: ..."}`, pass nothing. Shadow mode and a
+SubagentStop without `subagent_block` resolve to `pass` with `would_have`.
 """
 
 from __future__ import annotations
@@ -177,6 +173,7 @@ class _Ready(NamedTuple):
     api_key: str
     state: object
     questions: Mapping[str, object]
+    overflow: bool
 
 
 def _sanitized_final_message(payload: Mapping[str, object]) -> str:
@@ -250,7 +247,7 @@ def _gate_and_prepare(
             *args, action="gate_unavailable", gate_reason=no_key_gate, open_failures=open_failures
         )
 
-    state, _overflow = build_state(span, ctx.last_message, claim_list, policy)
+    state, overflow = build_state(span, ctx.last_message, claim_list, policy)
     questions = build_questions(state)
     return _Ready(
         span=span,
@@ -262,6 +259,7 @@ def _gate_and_prepare(
         api_key=api_key,
         state=state,
         questions=questions,
+        overflow=overflow,
     )
 
 
@@ -273,7 +271,7 @@ def _call_and_decide(
     transport: object,
 ) -> StopOutcome:
     args = (ctx.session_id, ctx.prompt_id, ctx.agent_id, ctx.mode, ctx.start)
-    call_transport = sp.resolve_transport(transport)
+    call_transport, transport_kind = sp.resolve_transport(transport)
 
     result = sp.call_provider(
         ready.state, ready.questions, ready.preset, ready.api_key, policy, ctx.start, call_transport
@@ -295,6 +293,7 @@ def _call_and_decide(
         ready.provider_name,
         policy,
         ready.span,
+        transport_kind,
     )
     for row in verdict_rows:
         ledger.append_row(row)
@@ -329,6 +328,7 @@ def _finalize_decision(
         gate_reason=resolved.guard_gate_reason or ready.gate_reason,
         hook_ms=hook_ms,
         open_failures_list=ready.open_failures,
+        compression_overflow=ready.overflow,
     )
     ledger.append_row(action_row)
     return StopOutcome(resolved.stdout_json, (*verdict_rows, action_row), resolved.action)

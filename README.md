@@ -4,8 +4,13 @@
 which commands ran, whether they succeeded or failed, and what the assistant said at the
 end of the turn. It writes this into a local, append-only ledger on your own machine. At
 Stop and SubagentStop it also verifies the assistant's final message against that
-ledger, sending a redacted evidence summary — never file contents, never raw tool
-output — to the selected provider for judging. It does this through Claude Code's own
+ledger, sending a redacted evidence summary to the selected provider for judging: prompt
+excerpts, a structural step list (tool, sanitized command, status, exit code), short
+redacted excerpts of tool output around failures and soft-fail candidates (a head and a
+tail, bounded by `store.excerpt_head` and `store.excerpt_tail`), the redacted final
+message, and the extracted claims. It never carries a never-send path or a full tool
+output, and file contents only where a tool printed them inside one of those excerpts;
+`docs/PRIVACY.md` has the field-by-field list. It does this through Claude Code's own
 hooks, with no separate service to run. Recording itself makes no network calls at all;
 verification is the one part of this plugin that does, and `provider: local-only` turns
 it off (recording continues; nothing is ever sent). `verdict doctor` also touches the

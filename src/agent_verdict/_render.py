@@ -35,4 +35,22 @@ def fmt_noul(value: object) -> str:
     return f"{float(value):.2f}"
 
 
-__all__ = ["excerpt", "fmt_noul"]
+_GUARD_PREFIX = "guard_"
+_JUDGED_PLAIN = ("evidence", "always_verify")
+
+
+def is_judged_action(row: object) -> bool:
+    """True when an `action` row carries a real provider judgement (final
+    review I1): the verifier ran and answers came back. That is any
+    `gate_reason` of `evidence` or `always_verify` (research mode), or a
+    `guard_*` reason (an enforce block the loop guard demoted). Stand-downs,
+    provider failures, and exceptions are not judged."""
+    if not isinstance(row, dict) or row.get("event") != "action":
+        return False
+    reason = row.get("gate_reason")
+    if not isinstance(reason, str):
+        return False
+    return reason in _JUDGED_PLAIN or reason.startswith(_GUARD_PREFIX)
+
+
+__all__ = ["excerpt", "fmt_noul", "is_judged_action"]

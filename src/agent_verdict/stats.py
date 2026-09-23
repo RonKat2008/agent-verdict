@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from agent_verdict._render import is_judged_action
 from agent_verdict.verdict_hot import ledger
 from agent_verdict.verdict_hot.breaker import Breaker
 
@@ -30,7 +31,6 @@ _TOOL_EVENT = "post"
 _FAILURE_EVENT = "post_fail"
 _STOP_EVENT = "stop"
 _ACTION_EVENT = "action"
-_EVIDENCE_GATE_REASON = "evidence"
 _GATE_UNAVAILABLE_ACTION = "gate_unavailable"
 
 
@@ -120,7 +120,7 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
             if isinstance(claims, (list, tuple)) and len(claims) > 0:
                 stops_with_claim += 1
         elif event == _ACTION_EVENT:
-            if row.get("gate_reason") == _EVIDENCE_GATE_REASON:
+            if is_judged_action(row):
                 action_rows_evidence += 1
             action = row.get("action")
             if isinstance(action, str):

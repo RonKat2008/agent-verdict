@@ -154,6 +154,7 @@
           "conn_ms": { "type": "number" },
           "infer_ms": { "type": "number" },
           "policy_version": { "type": "string" },
+          "transport": { "enum": ["live", "cassette", "fake"] },
           "listed_failures": { "type": "array" }
         }
       }
@@ -184,7 +185,8 @@
           "reason_hash": { "type": ["string", "null"] },
           "gate_reason": { "type": ["string", "null"] },
           "hook_ms": { "type": "number" },
-          "open_failures": { "type": "array" }
+          "open_failures": { "type": "array" },
+          "compression_overflow": { "type": ["boolean", "null"] }
         }
       }
     }

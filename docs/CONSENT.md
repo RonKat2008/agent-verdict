@@ -44,9 +44,12 @@ hook decides a completion claim needs judging (the evidence gate, G-STOP), it se
 request to your configured provider (OpenRouter by default, or TypeSafe): a redacted
 turn summary carrying excerpts of your prompt, a structural list of the steps taken
 (tool name, a sanitized command, status, exit code — never raw output at this level),
-short redacted output excerpts around failures only, the assistant's final message after
-redaction, and the claims extracted from it. It never carries file contents or anything
-from a never-send path or command. The full field-by-field breakdown is in
+short redacted excerpts of tool output around failures and soft-fail candidates (a head
+and a tail, bounded by `store.excerpt_head`/`store.excerpt_tail`), the assistant's final
+message after redaction, and the claims extracted from it. It never carries anything from
+a never-send path or command, never a full tool output, and file contents only where a
+tool printed them inside one of those excerpts (an MCP tool's response body counts as tool
+output and is excerpted the same way). The full field-by-field breakdown is in
 `docs/PRIVACY.md`'s "What changed in v0.2" section.
 
 The provider's reply is a small set of numeric judgments against a fixed question set;

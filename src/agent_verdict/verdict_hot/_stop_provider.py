@@ -113,14 +113,23 @@ def fake_transport() -> Callable[..., tuple[int, bytes, float, float]] | None:
     return lambda *_args: _fake_response(mode)
 
 
-def resolve_transport(explicit: object) -> object:
+def resolve_transport(explicit: object) -> tuple[object, str]:
     """`explicit` (a caller-supplied test transport) wins; otherwise a fake
     failure-injection transport if `VERDICT_FAKE_PROVIDER` selects one, else
     the cassette transport if `VERDICT_CASSETTE_DIR` is set, else `None`
-    (the real transport)."""
+    (the real transport). Returns `(transport, kind)` where `kind` is
+    `"live"`, `"cassette"`, or `"fake"` and is stamped on every `verdict`
+    row (final review I5) so replayed or injected answers can never pass
+    for live ones in the corpus."""
     if explicit is not None:
-        return explicit
-    return fake_transport() or cassette_transport()
+        return explicit, "fake"
+    fake = fake_transport()
+    if fake is not None:
+        return fake, "fake"
+    cassette = cassette_transport()
+    if cassette is not None:
+        return cassette, "cassette"
+    return None, "live" if fake_provider_mode() is None else "fake"
 
 
 def resolve_preset(provider_name: str) -> provider_mod.Preset:

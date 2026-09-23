@@ -70,6 +70,7 @@ def action_row(
     gate_reason: str | None,
     hook_ms: float,
     open_failures_list: list[str],
+    compression_overflow: bool | None = None,
 ) -> dict[str, object]:
     row = common_row("action", session_id, prompt_id, agent_id)
     row.update(
@@ -83,6 +84,7 @@ def action_row(
             "gate_reason": gate_reason,
             "hook_ms": hook_ms,
             "open_failures": open_failures_list,
+            "compression_overflow": compression_overflow,
         }
     )
     return row
@@ -110,6 +112,7 @@ def verdict_rows(
     provider_name: str,
     policy: Policy,
     span: Span,
+    transport_kind: str = "live",
 ) -> list[dict[str, object]]:
     listed = listed_failures(span)
     rows: list[dict[str, object]] = []
@@ -126,6 +129,7 @@ def verdict_rows(
                 "conn_ms": result.conn_ms,
                 "infer_ms": result.infer_ms,
                 "policy_version": policy.policy_version,
+                "transport": transport_kind,
             }
         )
         if key == "acks_failures":

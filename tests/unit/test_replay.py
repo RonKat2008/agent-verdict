@@ -330,3 +330,51 @@ def test_since_with_a_malformed_date_exits_2(capsys: pytest.CaptureFixture[str])
 
     assert code == 2
     assert capsys.readouterr().err.strip() != ""
+
+
+# --- Final review I1: research-mode and guard-demoted stops are replayed too
+
+
+def test_always_verify_and_guard_demoted_stops_are_replayed(
+    home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Research mode: a stop with no evidence still calls the provider and
+    # records gate_reason "always_verify" with real verdict rows.
+    research = _POLICY._replace(stop=_POLICY.stop._replace(always_verify=True))
+    _seed("s-av", [{"event": "prompt", "prompt_id": "p1", "prompt_excerpt": "say hi"}])
+    _seed_stop_row("s-av", "p1", "Done.")
+    stop_mod.handle(
+        _payload(session_id="s-av", prompt_id="p1", last_message="Done."),
+        research,
+        time.monotonic(),
+        "key",
+        transport=_answer_transport({}),
+    )
+
+    # Enforce mode, two blocks under one prompt: the guard demotes the
+    # second (gate_reason "guard_..."), but its verdict rows are real.
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_MODE", "enforce")
+    _seed("s-guard", _failing_step(prompt_id="p1", tool_use_id="f1"))
+    _run_stop("s-guard", "p1", "All tests pass now.", {"claims_done": 0.9, "acks_failures": 0.0})
+    _run_stop("s-guard", "p1", "All tests pass now.", {"claims_done": 0.9, "acks_failures": 0.0})
+    monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_MODE")
+
+    recorded = [r for r in ledger.read_session("s-guard") if r.get("event") == "action"]
+    assert [r["gate_reason"] for r in recorded][0] == "evidence"
+    assert str([r["gate_reason"] for r in recorded][1]).startswith("guard_")
+
+    code = replay.main(["--policy", str(PACKAGED_DEFAULT), "--json"])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    rows = _jsonl_lines(out)
+    assert len(rows) == 3, out
+    assert _skipped_count(out) == 0
+    by_session = {(r["session_id"], i): r for i, r in enumerate(rows)}
+    assert any(k[0] == "s-av" for k in by_session)
+    guard_rows = [r for r in rows if r["session_id"] == "s-guard"]
+    # "old" reports would_have when present: the demoted row was recorded
+    # as action=pass, would_have=block, and replay must see it.
+    assert recorded[1]["action"] == "pass" and recorded[1]["would_have"] == "block"
+    assert [r["old"] for r in guard_rows] == ["block", "block"]
+    assert [r["new"] for r in guard_rows] == ["block", "block"]

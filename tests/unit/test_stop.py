@@ -531,3 +531,96 @@ def test_unlisted_failures_are_not_acknowledged_on_the_next_span(home: Path) -> 
         for s in built.steps
         if not s.acknowledged and s.status == "error"
     )
+
+
+# --- Final review I5 and M1: transport stamp and compression_overflow on rows
+
+
+def _verdicts(outcome: stop.StopOutcome) -> list[dict[str, Any]]:
+    return [dict(r) for r in outcome.rows if r.get("event") == "verdict"]
+
+
+def _action(outcome: stop.StopOutcome) -> dict[str, Any]:
+    return dict([r for r in outcome.rows if r.get("event") == "action"][-1])
+
+
+def test_an_injected_transport_is_stamped_fake_on_every_verdict_row(home: Path) -> None:
+    _seed("s1", _failing_step())
+
+    outcome = stop.handle(
+        _payload(last_message="All tests pass now."),
+        _POLICY,
+        time.monotonic(),
+        "k" * 40,
+        transport=_answer_transport({"claims_done": 0.9}),
+    )
+
+    verdicts = _verdicts(outcome)
+    assert verdicts and all(r["transport"] == "fake" for r in verdicts)
+
+
+def test_a_cassette_transport_is_stamped_cassette(
+    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from verdict_hot import cassettes as cassettes_mod
+
+    cassette_dir = tmp_path / "cassettes"
+    cassette_dir.mkdir()
+    monkeypatch.setenv("VERDICT_CASSETTE_DIR", str(cassette_dir))
+    _seed("s1", _failing_step())
+    captured: list[bytes] = []
+
+    def _record_then_replay(host: str, path: str, body: bytes, headers: dict[str, str]) -> Any:
+        captured.append(body)
+        return _answer_transport({"claims_done": 0.9})(host, path, body, headers)
+
+    # First call through an explicit transport just to learn the request sha.
+    stop.handle(
+        _payload(last_message="All tests pass now."),
+        _POLICY,
+        time.monotonic(),
+        "k" * 40,
+        transport=_record_then_replay,
+    )
+    import hashlib
+
+    sha = hashlib.sha256(captured[0]).hexdigest()
+    request = json.loads(captured[0])
+    answers = {
+        k: {"type": q["type"], "noul": 0.9}
+        if q["type"] == "noul"
+        else {"type": "score", "score": 0.5}
+        for k, q in request["questions"].items()
+    }
+    (cassette_dir / f"{sha}.json").write_text(
+        json.dumps({"model_returned": "typesafe/jev-1.13-20260917", "answers": answers})
+    )
+    assert isinstance(
+        cassettes_mod.RecordedTransport(cassette_dir), cassettes_mod.RecordedTransport
+    )
+
+    # Fresh session so the span (and hence the sha) is identical.
+    _seed("s2", _failing_step())
+    outcome = stop.handle(
+        _payload(session_id="s2", last_message="All tests pass now."),
+        _POLICY,
+        time.monotonic(),
+        "k" * 40,
+    )
+
+    verdicts = _verdicts(outcome)
+    assert verdicts and all(r["transport"] == "cassette" for r in verdicts)
+
+
+def test_the_action_row_records_compression_overflow(home: Path) -> None:
+    _seed("s1", _failing_step())
+
+    outcome = stop.handle(
+        _payload(last_message="All tests pass now."),
+        _POLICY,
+        time.monotonic(),
+        "k" * 40,
+        transport=_answer_transport({"claims_done": 0.9}),
+    )
+
+    assert _action(outcome)["compression_overflow"] is False

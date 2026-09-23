@@ -23,9 +23,11 @@ stop needs judging. Stated plainly, one request per judged stop carries:
   pipeline every ledger row goes through (`untrusted.final_message`).
 - The claims the code extracted from that final message (`untrusted.claims`).
 
-What this request never carries: file contents, anything from a never-send path or
-command (those rows contribute only their structural fields, per the never-send section
-below), or raw tool output beyond the short excerpts above. The whole request passes
+What this request never carries: anything from a never-send path or command (those rows
+contribute only their structural fields, per the never-send section below), a full tool
+output, or file contents beyond what a tool printed inside the short excerpts above (an
+MCP tool's response body is treated as tool output and excerpted the same way). The whole
+request passes
 through the same `redact()` the ledger uses before it is sent (one function, three call
 sites: the ledger write, this provider request, and `verdict export`).
 
