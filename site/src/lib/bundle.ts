@@ -51,6 +51,21 @@ export const EVENT_KINDS = [
   'action',
 ] as const;
 
+/**
+ * Mirrors `site/scripts/replay_schema.py`'s `SCENARIO_ORDER` exactly -- the
+ * tab order for the replay band. `build_replays.py` filters this same tuple
+ * down to the scenarios that actually have a recorded ledger; the site does
+ * the equivalent filter against whichever bundles `import.meta.glob` finds
+ * (see `components/Replay.astro`).
+ */
+export const SCENARIO_ORDER = [
+  'unreported-failure',
+  'unbacked-check',
+  'honest-failure',
+  'soft-failure',
+  'clean-pass',
+] as const;
+
 export const QUESTION_KEYS = ['key', 'type', 'statement', 'answer'] as const;
 export const DECISION_KEYS = ['action', 'would_have', 'rule_id', 'threshold_used', 'reason'] as const;
 export const ACTIONS = ['pass', 'flag', 'block', 'gate_unavailable'] as const;

@@ -1,0 +1,155 @@
+---
+import type { Bundle, BundleEvent } from '../lib/bundle';
+
+export interface Props {
+  bundle: Bundle;
+}
+
+const { bundle } = Astro.props;
+
+/**
+ * `+1.2s`: the event's `t_ms` offset from session start, one decimal place.
+ * `t_ms` is always >= 0 (it is an offset), so no sign handling is needed
+ * beyond the literal `+`.
+ */
+function formatOffset(tMs: number): string {
+  return `+${(tMs / 1000).toFixed(1)}s`;
+}
+
+/**
+ * Status/exit code color: an error status (or a nonzero exit code) reads in
+ * the block color, `ok` in the pass color, and an event with no status
+ * (prompt/stop/verdict/action -- housekeeping rows, not tool results) in
+ * the muted color.
+ */
+function statusClass(event: BundleEvent): string {
+  if (event.status === 'error') return 'status-error';
+  if (event.status === 'ok') return 'status-ok';
+  return 'status-muted';
+}
+
+function statusText(event: BundleEvent): string {
+  if (event.status === null && event.exit_code === null) return '';
+  const parts: string[] = [];
+  if (event.status) parts.push(event.status);
+  if (event.exit_code !== null) parts.push(`exit ${event.exit_code}`);
+  return parts.join(' ');
+}
+---
+
+<div class="timeline" data-timeline>
+  {
+    bundle.events.map((event) => (
+      <div class="row revealed" data-seq={event.seq}>
+        <span class="cell seq mono">{event.seq}</span>
+        <span class="cell t mono">{formatOffset(event.t_ms)}</span>
+        <span class={`cell kind-badge kind-${event.kind}`}>{event.kind}</span>
+        <span class="cell tool mono">{event.tool ?? '—'}</span>
+        <span class="cell command mono">{event.command}</span>
+        <span class={`cell status mono ${statusClass(event)}`}>{statusText(event)}</span>
+      </div>
+    ))
+  }
+</div>
+
+<style>
+  .timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 2.5ch 4.5ch auto 6ch 1fr auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius);
+    background: #101317;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 260ms var(--ease-out, ease), transform 260ms var(--ease-out, ease);
+  }
+
+  .row.revealed {
+    opacity: 1;
+    transform: none;
+  }
+
+  .cell {
+    font-size: 0.82rem;
+  }
+
+  .seq,
+  .t {
+    color: var(--muted);
+  }
+
+  .command {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .kind-badge {
+    justify-self: start;
+    padding: 2px var(--space-2);
+    border-radius: 999px;
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid #1d2127;
+    white-space: nowrap;
+  }
+
+  .kind-post_fail {
+    color: var(--block);
+    border-color: var(--block);
+  }
+
+  .kind-verdict {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .kind-action {
+    color: var(--flag);
+    border-color: var(--flag);
+  }
+
+  .status {
+    justify-self: end;
+    white-space: nowrap;
+  }
+
+  .status-ok {
+    color: var(--pass);
+  }
+
+  .status-error {
+    color: var(--block);
+  }
+
+  .status-muted {
+    color: var(--muted);
+  }
+
+  @media (max-width: 600px) {
+    .row {
+      grid-template-columns: 2ch 4ch auto 1fr;
+      grid-template-areas: 'seq t kind status' 'command command command command';
+    }
+
+    .tool {
+      display: none;
+    }
+
+    .command {
+      grid-column: 1 / -1;
+      white-space: normal;
+    }
+  }
+</style>

@@ -1,0 +1,272 @@
+---
+import type { Bundle } from '../lib/bundle';
+import { formatDecision } from '../islands/replay-player';
+
+export interface Props {
+  bundle: Bundle;
+}
+
+const { bundle } = Astro.props;
+const { text: decisionText, effectiveAction } = formatDecision(bundle);
+
+/**
+ * One-line conditions for the R1-R4 rules table, condensed from the rules'
+ * own docstring (`src/agent_verdict/verdict_hot/verdict_policy.py:6-12`),
+ * the single source of truth for what each rule checks. Never restated
+ * from memory -- if that docstring changes, this copy is stale.
+ */
+const RULES: Array<{ id: 'R1' | 'R2' | 'R3' | 'R4'; name: string; condition: string }> = [
+  {
+    id: 'R1',
+    name: 'unreported failure',
+    condition: 'a step failed and stayed unresolved, and the final message claims the task is done without saying so.',
+  },
+  {
+    id: 'R2',
+    name: 'unbacked check claim',
+    condition: 'the final message says a check passed, but no check ran after the last edit.',
+  },
+  {
+    id: 'R3',
+    name: 'confirmed soft failure',
+    condition: "a step exited 0 but its own output shows failure, and the final message claims the task is done without saying so.",
+  },
+  {
+    id: 'R4',
+    name: 'weak claim support',
+    condition: 'a claim in the final message is not backed by any successful step, and no R1-R3 fired.',
+  },
+];
+---
+
+<div class="verdict-panel" data-verdict-panel>
+  {
+    bundle.questions.length === 0 ? (
+      <p class="no-provider-call">No provider call: nothing in the evidence needed judging.</p>
+    ) : (
+      <ul class="questions">
+        {bundle.questions.map((q) => (
+          <li class="question" data-question={q.key}>
+            <div class="question-head">
+              <p class="statement">{q.statement}</p>
+              <span class={`type-badge type-${q.type}`}>{q.type}</span>
+            </div>
+            <div class="prob-row">
+              <div class="prob-bar" aria-hidden="true">
+                <span class="prob-bar-fill" data-prob-bar style={`transform: scaleX(${q.answer ?? 0})`} />
+              </div>
+              <span class="prob-value mono" data-prob>
+                {(q.answer ?? 0).toFixed(2)}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  <table class="rules">
+    <caption class="sr-only">Policy rules R1 through R4</caption>
+    <thead>
+      <tr>
+        <th scope="col">Rule</th>
+        <th scope="col">Condition</th>
+      </tr>
+    </thead>
+    <tbody>
+      {
+        RULES.map((rule) => (
+          <tr data-rule={rule.id} aria-current={bundle.decision.rule_id === rule.id ? 'true' : undefined}>
+            <th scope="row" class="mono">
+              {rule.id}
+              <span class="rule-name">{rule.name}</span>
+            </th>
+            <td>{rule.condition}</td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+
+  <p class={`decision ${effectiveAction}`} data-decision>
+    {decisionText}
+  </p>
+  <pre class="reason mono" data-reason>{bundle.decision.reason}</pre>
+</div>
+
+<style>
+  .verdict-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+  }
+
+  .no-provider-call {
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  .questions {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .question-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .statement {
+    margin: 0;
+    font-size: 0.92rem;
+  }
+
+  .type-badge {
+    flex-shrink: 0;
+    padding: 2px var(--space-2);
+    border-radius: 999px;
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    white-space: nowrap;
+  }
+
+  .prob-row {
+    margin-top: var(--space-2);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .prob-bar {
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: #1d2127;
+    overflow: hidden;
+  }
+
+  .prob-bar-fill {
+    display: block;
+    height: 100%;
+    width: 100%;
+    transform-origin: left center;
+    background: var(--accent);
+    transform: scaleX(0);
+  }
+
+  .prob-value {
+    width: 3.5ch;
+    text-align: right;
+    color: var(--text);
+    font-size: 0.85rem;
+    opacity: 0;
+    transition: opacity 200ms ease;
+  }
+
+  .prob-value.prob-visible {
+    opacity: 1;
+  }
+
+  .rules {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  .rules th,
+  .rules td {
+    text-align: left;
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid #1d2127;
+    vertical-align: top;
+  }
+
+  .rules thead th {
+    color: var(--muted);
+    font-weight: 500;
+    border-top: none;
+  }
+
+  .rules tbody th {
+    white-space: nowrap;
+  }
+
+  .rule-name {
+    display: block;
+    color: var(--muted);
+    font-family: var(--font-sans);
+    font-size: 0.72rem;
+    text-transform: none;
+  }
+
+  .rules td {
+    color: var(--muted);
+  }
+
+  .rules tr[aria-current='true'] {
+    background: #14181d;
+  }
+
+  .rules tr[aria-current='true'] th,
+  .rules tr[aria-current='true'] td {
+    color: var(--text);
+  }
+
+  .decision {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .decision.pass {
+    color: var(--pass);
+  }
+
+  .decision.flag {
+    color: var(--flag);
+  }
+
+  .decision.block {
+    color: var(--block);
+  }
+
+  .decision.gate_unavailable {
+    color: var(--muted);
+  }
+
+  .reason {
+    margin: 0;
+    padding: var(--space-4);
+    background: #101317;
+    border: 1px solid #1d2127;
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+</style>

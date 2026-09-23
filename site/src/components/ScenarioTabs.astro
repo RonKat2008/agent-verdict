@@ -1,0 +1,66 @@
+---
+import type { Bundle } from '../lib/bundle';
+
+export interface Props {
+  bundles: Bundle[];
+  activeName: string;
+}
+
+const { bundles, activeName } = Astro.props;
+---
+
+<div class="scenario-tabs" role="tablist" aria-label="Recorded scenarios" data-tabs>
+  {
+    bundles.map((bundle) => {
+      const selected = bundle.name === activeName;
+      return (
+        <button
+          type="button"
+          role="tab"
+          id={`tab-${bundle.name}`}
+          aria-selected={selected ? 'true' : 'false'}
+          aria-controls={`panel-${bundle.name}`}
+          tabindex={selected ? 0 : -1}
+          data-scenario={bundle.name}
+        >
+          {bundle.title}
+        </button>
+      );
+    })
+  }
+</div>
+
+<style>
+  .scenario-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .scenario-tabs button {
+    background: transparent;
+    border: 1px solid #1d2127;
+    color: var(--muted);
+    border-radius: 999px;
+    padding: var(--space-2) var(--space-4);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: opacity 150ms ease, transform 150ms ease;
+  }
+
+  .scenario-tabs button:hover {
+    opacity: 0.8;
+  }
+
+  .scenario-tabs button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .scenario-tabs button[aria-selected='true'] {
+    color: var(--ground);
+    background: var(--accent);
+    border-color: var(--accent);
+    transform: translateY(-1px);
+  }
+</style>
