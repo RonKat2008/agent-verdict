@@ -67,3 +67,12 @@ def test_unbacked_check_allows_read_and_edit_only() -> None:
     )
     assert rss._allowed_tools(spec) == "Read,Edit"
     assert rss._allowed_tools({"name": "x"}) == "Bash"
+
+
+def test_temp_paths_are_scrubbed_from_the_committed_ledger() -> None:
+    raw = (
+        '{"input_excerpt":"/private/var/folders/ab/xyz123/T/verdict-site-cwd-h24ee4w7/app.py",'
+        '"x":"/tmp/verdict-site-home-q1/events"}'
+    )
+    out = rss.scrub_temp_paths(raw)
+    assert out == '{"input_excerpt":"<cwd>/app.py","x":"<home>/events"}'

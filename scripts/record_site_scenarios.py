@@ -14,6 +14,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,13 +46,25 @@ def load_scenario(name: str) -> dict[str, Any]:
     return data
 
 
+_TEMP_DIR_RE = re.compile(
+    r"/(?:private/)?(?:var|tmp)/[^\s\"']*?verdict-site-(cwd|home)-[A-Za-z0-9_]+"
+)
+
+
+def scrub_temp_paths(text: str) -> str:
+    """The recorder's temp cwd and VERDICT_HOME paths carry a per-machine
+    temp-folder token; the committed ledger replaces them with `<cwd>` and
+    `<home>` so nothing machine-specific is published."""
+    return _TEMP_DIR_RE.sub(lambda m: f"<{m.group(1)}>", text)
+
+
 def copy_ledger(verdict_home: Path, out_dir: Path) -> Path:
     files = sorted((verdict_home / "events").glob("*.jsonl"))
     if len(files) != 1:
         raise RuntimeError(f"expected exactly one session ledger, found {len(files)}")
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / "ledger.jsonl"
-    shutil.copyfile(files[0], target)
+    target.write_text(scrub_temp_paths(files[0].read_text(encoding="utf-8")), encoding="utf-8")
     return target
 
 
