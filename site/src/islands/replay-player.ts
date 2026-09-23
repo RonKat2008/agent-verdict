@@ -47,12 +47,37 @@ export function formatDecision(bundle: Bundle): { text: string; effectiveAction:
   return { text: decision.action, effectiveAction: decision.action };
 }
 
+/**
+ * `formatDecision`'s text, plus the fired rule id when there is one (e.g.
+ * "would block · R1") -- the label the timeline's `action` row shows.
+ * A bundle with no fired rule (a plain `pass`, or `clean-pass`'s
+ * no-evidence path) shows the text alone.
+ */
+export function decisionLabel(bundle: Bundle): string {
+  const { text } = formatDecision(bundle);
+  return bundle.decision.rule_id ? `${text} · ${bundle.decision.rule_id}` : text;
+}
+
+/**
+ * Bundle events don't carry which question a `verdict`-kind event
+ * corresponds to: the nth `verdict` event (0-indexed, in `seq` order) maps
+ * to `questions[n]`. Both `ReplayPlayer.step()` and `Timeline.astro` (at
+ * build time, for the server-rendered row text) use this one function so
+ * the mapping can never drift between the two.
+ */
+export function verdictIndexForEvent(bundle: Bundle, eventIndex: number): number {
+  let count = -1;
+  for (let i = 0; i <= eventIndex; i += 1) {
+    if (bundle.events[i]?.kind === 'verdict') count += 1;
+  }
+  return count;
+}
+
 export class ReplayPlayer {
   private readonly root: HTMLElement;
   private readonly bundle: Bundle;
   private readonly stepMs: number;
   private readonly reducedMotion: boolean;
-  private verdictIndex = 0;
   private playing = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   public position = 0;
@@ -117,8 +142,7 @@ export class ReplayPlayer {
     row?.classList.add('revealed');
 
     if (event.kind === 'verdict') {
-      const question = this.bundle.questions[this.verdictIndex];
-      this.verdictIndex += 1;
+      const question = this.bundle.questions[verdictIndexForEvent(this.bundle, this.position)];
       if (question) this.animateProbability(question.key, question.answer ?? 0);
     } else if (event.kind === 'action') {
       this.applyDecision();
@@ -130,7 +154,6 @@ export class ReplayPlayer {
   restart(): void {
     this.pause();
     this.position = 0;
-    this.verdictIndex = 0;
 
     this.root.querySelectorAll('.revealed').forEach((el) => el.classList.remove('revealed'));
     this.root.querySelectorAll('[data-rule]').forEach((el) => el.removeAttribute('aria-current'));

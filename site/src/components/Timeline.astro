@@ -1,11 +1,42 @@
 ---
 import type { Bundle, BundleEvent } from '../lib/bundle';
+import { decisionLabel, formatDecision, verdictIndexForEvent } from '../islands/replay-player';
 
 export interface Props {
   bundle: Bundle;
 }
 
 const { bundle } = Astro.props;
+const { effectiveAction } = formatDecision(bundle);
+const actionLabel = decisionLabel(bundle);
+
+/**
+ * The command column's content for the housekeeping rows that carry no
+ * `command` of their own: a `verdict` event names the question it answered
+ * and that answer (same positional mapping `ReplayPlayer.step()` uses, so
+ * the no-JS row already reads correctly); an `action` event repeats the
+ * verdict panel's decision label; a `stop` event is labeled plainly, since
+ * the final message itself is shown elsewhere (the hero terminal), not
+ * duplicated here.
+ */
+type CommandContent =
+  | { kind: 'plain'; text: string }
+  | { kind: 'verdict'; key: string; value: string }
+  | { kind: 'decision' }
+  | { kind: 'stop' };
+
+function commandContent(event: BundleEvent, index: number): CommandContent {
+  if (event.kind === 'verdict') {
+    const question = bundle.questions[verdictIndexForEvent(bundle, index)];
+    if (question) {
+      return { kind: 'verdict', key: question.key, value: (question.answer ?? 0).toFixed(2) };
+    }
+    return { kind: 'plain', text: '' };
+  }
+  if (event.kind === 'action') return { kind: 'decision' };
+  if (event.kind === 'stop') return { kind: 'stop' };
+  return { kind: 'plain', text: event.command };
+}
 
 /**
  * `+1.2s`: the event's `t_ms` offset from session start, one decimal place.
@@ -39,16 +70,28 @@ function statusText(event: BundleEvent): string {
 
 <div class="timeline" data-timeline>
   {
-    bundle.events.map((event) => (
-      <div class="row revealed" data-seq={event.seq}>
-        <span class="cell seq mono">{event.seq}</span>
-        <span class="cell t mono">{formatOffset(event.t_ms)}</span>
-        <span class={`cell kind-badge kind-${event.kind}`}>{event.kind}</span>
-        <span class="cell tool mono">{event.tool ?? '—'}</span>
-        <span class="cell command mono">{event.command}</span>
-        <span class={`cell status mono ${statusClass(event)}`}>{statusText(event)}</span>
-      </div>
-    ))
+    bundle.events.map((event, index) => {
+      const content = commandContent(event, index);
+      return (
+        <div class="row revealed" data-seq={event.seq}>
+          <span class="cell seq mono">{event.seq}</span>
+          <span class="cell t mono">{formatOffset(event.t_ms)}</span>
+          <span class={`cell kind-badge kind-${event.kind}`}>{event.kind}</span>
+          <span class="cell tool mono">{event.tool ?? '—'}</span>
+          <span class="cell command mono">
+            {content.kind === 'plain' && content.text}
+            {content.kind === 'verdict' && (
+              <span class="ev-verdict">
+                <span class="ev-key">{content.key}</span> <span class="ev-value">{content.value}</span>
+              </span>
+            )}
+            {content.kind === 'decision' && <span class={`ev-decision ${effectiveAction}`}>{actionLabel}</span>}
+            {content.kind === 'stop' && <span class="ev-stop">final message</span>}
+          </span>
+          <span class={`cell status mono ${statusClass(event)}`}>{statusText(event)}</span>
+        </div>
+      );
+    })
   }
 </div>
 
@@ -91,6 +134,40 @@ function statusText(event: BundleEvent): string {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .ev-key {
+    color: var(--muted);
+  }
+
+  .ev-value {
+    color: var(--text);
+  }
+
+  .ev-stop {
+    color: var(--muted);
+  }
+
+  .ev-decision {
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-weight: 500;
+  }
+
+  .ev-decision.pass {
+    color: var(--pass);
+  }
+
+  .ev-decision.flag {
+    color: var(--flag);
+  }
+
+  .ev-decision.block {
+    color: var(--block);
+  }
+
+  .ev-decision.gate_unavailable {
+    color: var(--muted);
   }
 
   .kind-badge {

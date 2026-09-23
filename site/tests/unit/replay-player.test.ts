@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Bundle } from '../../src/lib/bundle';
 import { parseBundle } from '../../src/lib/bundle';
-import { ReplayPlayer, formatDecision, initScenarioTabs } from '../../src/islands/replay-player';
+import {
+  ReplayPlayer,
+  decisionLabel,
+  formatDecision,
+  initScenarioTabs,
+  verdictIndexForEvent,
+} from '../../src/islands/replay-player';
 import fixture from '../../src/data/fixtures/unreported-failure.json';
 
 /**
@@ -17,12 +23,32 @@ function buildRoot(bundle: Bundle): HTMLElement {
 
   const timeline = document.createElement('div');
   timeline.setAttribute('data-timeline', '');
-  for (const event of bundle.events) {
+  bundle.events.forEach((event, index) => {
     const row = document.createElement('div');
     row.className = 'row revealed';
     row.dataset.seq = String(event.seq);
+
+    // Mirrors Timeline.astro's server-rendered command cell exactly (same
+    // shared helpers), since that text is static -- ReplayPlayer never
+    // writes it.
+    const command = document.createElement('span');
+    command.className = 'cell command mono';
+    if (event.kind === 'verdict') {
+      const question = bundle.questions[verdictIndexForEvent(bundle, index)];
+      if (question) {
+        command.innerHTML = `<span class="ev-key">${question.key}</span> <span class="ev-value">${(question.answer ?? 0).toFixed(2)}</span>`;
+      }
+    } else if (event.kind === 'action') {
+      const { effectiveAction } = formatDecision(bundle);
+      command.innerHTML = `<span class="ev-decision ${effectiveAction}">${decisionLabel(bundle)}</span>`;
+    } else if (event.kind === 'stop') {
+      command.innerHTML = '<span class="ev-stop">final message</span>';
+    } else {
+      command.textContent = event.command;
+    }
+    row.appendChild(command);
     timeline.appendChild(row);
-  }
+  });
   root.appendChild(timeline);
 
   const panel = document.createElement('div');
@@ -124,6 +150,17 @@ describe('ReplayPlayer', () => {
     const decisionText = root.querySelector('[data-decision]')?.textContent;
     expect(decisionText).toBe('would block');
     expect(root.querySelector('[data-reason]')?.textContent).toBe(bundle.decision.reason);
+
+    // The timeline's own verdict/action rows (static text, server-rendered
+    // by Timeline.astro -- ReplayPlayer never writes these) still read
+    // correctly once every row is revealed.
+    const verdictSeq = bundle.events.find((e) => e.kind === 'verdict')?.seq;
+    const verdictRow = root.querySelector(`[data-seq="${verdictSeq}"] .cell.command`);
+    expect(verdictRow?.textContent?.trim()).toBe('claims_done 0.92');
+
+    const actionSeq = bundle.events.find((e) => e.kind === 'action')?.seq;
+    const actionRow = root.querySelector(`[data-seq="${actionSeq}"] .cell.command`);
+    expect(actionRow?.textContent?.trim()).toBe('would block · R1');
   });
 
   it('restart() removes every revealed class and resets position to 0', () => {
