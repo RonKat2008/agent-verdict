@@ -1,7 +1,10 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-  --text-hero: clamp(2.25rem, 1rem + 4vw, 4.5rem);
+  /* Upper clamp trimmed from 4.5rem: at the 1440 hero column width the first
+     sentence still wraps to two lines here, which is fine -- "They didn't."
+     (Hero.astro's `.line-last`) is always its own final line regardless. */
+  --text-hero: clamp(2.25rem, 1rem + 4vw, 4rem);
 }
 
 body {

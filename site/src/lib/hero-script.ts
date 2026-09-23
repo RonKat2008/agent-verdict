@@ -5,18 +5,31 @@ const PROMPT_DELAY_MS = 400;
 const CMD_DELAY_MS = 250;
 const FAIL_DELAY_MS = 500;
 const CLAIM_DELAY_MS = 500;
-const BLOCK_DELAY_MS = 0;
+const BLOCK_LINE_DELAY_MS = 250;
 
-function firstLine(text: string): string {
-  const [head] = text.split('\n');
-  return head ?? '';
+/**
+ * The hook's own block reason is multi-line ("...unresolved failures:",
+ * one "step N (Bash, exit 1): ..." line per failing step, then "Fix it or
+ * tell the user..."); typing only the first line reads as unfinished. Every
+ * non-empty line of `reason` becomes its own typed `block` line, in order.
+ * An empty (or whitespace-only) reason -- e.g. a `pass` decision -- yields
+ * no lines at all.
+ */
+function reasonLines(reason: string): TypeLine[] {
+  if (reason.trim() === '') return [];
+  const parts = reason.split('\n');
+  return parts.map((text, i) => ({
+    text,
+    delayMs: i === parts.length - 1 ? 0 : BLOCK_LINE_DELAY_MS,
+    cls: 'block' as const,
+  }));
 }
 
 /**
  * Turns a replay bundle into the hero terminal's typed transcript: the
  * task prompt (from `summary`), one `cmd` line per `post`/`post_fail` event
  * (with an `exit 1` `fail` line for the failing ones), the assistant's
- * claim, and the block reason's first line.
+ * claim, and the block reason typed one line at a time.
  */
 export function heroScript(bundle: Bundle): TypeLine[] {
   const lines: TypeLine[] = [
@@ -32,7 +45,7 @@ export function heroScript(bundle: Bundle): TypeLine[] {
   }
 
   lines.push({ text: bundle.final_message, delayMs: CLAIM_DELAY_MS, cls: 'claim' });
-  lines.push({ text: firstLine(bundle.decision.reason), delayMs: BLOCK_DELAY_MS, cls: 'block' });
+  lines.push(...reasonLines(bundle.decision.reason));
 
   return lines;
 }

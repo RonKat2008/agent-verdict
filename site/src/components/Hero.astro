@@ -28,7 +28,10 @@ const INSTALL_CMD = 'claude plugin install agent-verdict';
 <section class="hero" aria-labelledby="hero-heading">
   <div class="hero-grid container">
     <div class="hero-copy">
-      <h1 id="hero-heading">The agent said the tests passed. They didn&rsquo;t.</h1>
+      <h1 id="hero-heading">
+        <span class="line">The agent said the tests passed.</span>
+        <span class="line line-last">They didn&rsquo;t.</span>
+      </h1>
       <p class="subhead">
         A Claude Code plugin that records every tool result and blocks a stop when the
         final message claims something the results do not support.
@@ -89,6 +92,19 @@ const INSTALL_CMD = 'claude plugin install agent-verdict';
   .hero-copy h1 {
     font-size: var(--text-hero);
     letter-spacing: -0.02em;
+    /* Deterministic break: "They didn't." is always its own final line,
+       regardless of how the first sentence itself wraps at a given width.
+       text-wrap stays the browser default (never `balance`) so the split
+       point below is never overridden. */
+    text-wrap: wrap;
+  }
+
+  .hero-copy h1 .line {
+    display: block;
+  }
+
+  .hero-copy h1 .line-last {
+    margin-top: 0.1em;
   }
 
   .subhead {
