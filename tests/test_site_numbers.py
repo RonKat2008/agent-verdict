@@ -27,8 +27,11 @@ def test_numbers_come_from_d033() -> None:
     by_id = {n["id"]: n for n in data}
     assert set(by_id) == EXPECTED_IDS
     d033 = build_numbers.d033_text()
-    assert by_id["stop_p50_ms"]["value"] == float(re.search(r"Stop p50 ([\d.]+) ms", d033).group(1))
-    assert by_id["stop_p95_ms"]["value"] == float(re.search(r"p95 ([\d.]+) ms", d033).group(1))
+    p50 = re.search(r"Stop p50 ([\d.]+) ms", d033)
+    p95 = re.search(r"p95 ([\d.]+) ms", d033)
+    assert p50 is not None and p95 is not None
+    assert by_id["stop_p50_ms"]["value"] == float(p50.group(1))
+    assert by_id["stop_p95_ms"]["value"] == float(p95.group(1))
     assert by_id["tests"]["value"] == 1055
     assert by_id["coverage_pct"]["value"] == 94.38
     assert by_id["recorder_p50_ms"]["value"] == 38.0
