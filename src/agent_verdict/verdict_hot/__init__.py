@@ -9,4 +9,4 @@ other with relative imports (`from . import ledger`) so both copies work.
 from __future__ import annotations
 
 SCHEMA_V = 1
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"

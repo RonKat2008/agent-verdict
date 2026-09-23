@@ -48,7 +48,7 @@ def test_hooks_json_registers_exactly_the_m1_and_m2_events_in_exec_form() -> Non
 def test_plugin_manifest_fields() -> None:
     manifest = json.loads((ROOT / "plugin/.claude-plugin/plugin.json").read_text())
     assert manifest["name"] == "agent-verdict"
-    assert manifest["version"] == "0.1.0"
+    assert manifest["version"] == "0.2.0"
     assert set(manifest["userConfig"]) == {"mode", "provider", "api_key"}
     mode = manifest["userConfig"]["mode"]
     assert mode["options"] == ["shadow", "enforce", "off"] and mode["default"] == "shadow"
