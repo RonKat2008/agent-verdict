@@ -258,3 +258,35 @@ def test_mode_off_skips_the_verifier_through_run_sh(tmp_path: Path, value: str) 
     assert proc.returncode == 0 and proc.stdout == b""
     # `off` is handled before any import: no new rows beyond the two seeded ones.
     assert len(_rows(home)) == 2
+
+
+def test_an_unparseable_stop_payload_is_skipped_not_judged(tmp_path: Path) -> None:
+    """Final review I4: a Stop payload the recorder cannot parse must not
+    reach the verifier -- no `action` row, empty stdout, and hook.log keeps
+    the recorder's `skipped` outcome instead of a verdict overwriting it."""
+    home = tmp_path / "home"
+    cassette_dir = tmp_path / "cassettes"
+    cassette_dir.mkdir()
+    _write_ledger(home, _seeded_rows())
+    payload = json.loads((FIXTURES / "stop.json").read_text())
+    for required in ("cwd", "transcript_path"):
+        payload.pop(required, None)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("VERDICT_")}
+    env["VERDICT_HOME"] = str(home)
+    env["VERDICT_CASSETTE_DIR"] = str(cassette_dir)
+    env["CLAUDE_PLUGIN_OPTION_MODE"] = "enforce"
+
+    proc = subprocess.run(
+        [str(RUN_SH), "stop"],
+        input=json.dumps(payload).encode(),
+        capture_output=True,
+        timeout=20,
+        env=env,
+        check=False,
+    )
+
+    assert proc.returncode == 0 and proc.stdout == b""
+    assert [r["event"] for r in _rows(home) if r["event"] == "action"] == []
+    log_lines = [json.loads(line) for line in (home / "hook.log").read_text().splitlines()]
+    stop_lines = [entry for entry in log_lines if entry.get("event") == "stop"]
+    assert stop_lines and stop_lines[-1]["outcome"] == "skipped"

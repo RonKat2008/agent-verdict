@@ -247,7 +247,14 @@ def _handle(start: float) -> tuple[str | None, str, str | None]:
     except Exception as exc:  # noqa: BLE001 - fail-open contract (global-constraints.md)
         return session_id, "exception", type(exc).__name__
 
-    if isinstance(payload, dict) and payload.get("hook_event_name") in _STOP_EVENT_NAMES:
+    is_stop = isinstance(payload, dict) and payload.get("hook_event_name") in _STOP_EVENT_NAMES
+    if is_stop and outcome != "ok":
+        return (
+            session_id,
+            outcome,
+            None,
+        )  # final review I4: never judge a payload we could not record
+    if is_stop:
         try:
             outcome = _run_stop(cast(Mapping[str, object], payload), start)
         except Exception as exc:  # noqa: BLE001 - fail-open contract (fix round 1 item 1)
