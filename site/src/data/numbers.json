@@ -1,0 +1,47 @@
+[
+  {
+    "id": "stop_p50_ms",
+    "label": "Stop hook p50 (live, OpenRouter)",
+    "value": 321.5,
+    "unit": "ms",
+    "source_command": "uv run python scripts/bench_stop_live.py --n 50",
+    "measured_on": "2026-09-22",
+    "note": "In-process time from hook entry; excludes the ~35 ms interpreter start."
+  },
+  {
+    "id": "stop_p95_ms",
+    "label": "Stop hook p95 (live, OpenRouter)",
+    "value": 474.3,
+    "unit": "ms",
+    "source_command": "uv run python scripts/bench_stop_live.py --n 50",
+    "measured_on": "2026-09-22",
+    "note": "Gate G2.6 bound is 2,500 ms."
+  },
+  {
+    "id": "recorder_p50_ms",
+    "label": "Recorder p50 through the launcher",
+    "value": 38.0,
+    "unit": "ms",
+    "source_command": "make bench-hook",
+    "measured_on": "2026-09-22",
+    "note": "Stop-event recording only, no provider call; default python3."
+  },
+  {
+    "id": "tests",
+    "label": "Tests at tag m2",
+    "value": 1055,
+    "unit": "",
+    "source_command": "make test",
+    "measured_on": "2026-09-22",
+    "note": ""
+  },
+  {
+    "id": "coverage_pct",
+    "label": "Hot-path statement coverage",
+    "value": 94.38,
+    "unit": "%",
+    "source_command": "make coverage-hot",
+    "measured_on": "2026-09-22",
+    "note": "Merged over plugin/hooks and src copies; gate is 90."
+  }
+]
