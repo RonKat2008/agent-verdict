@@ -71,7 +71,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["src", "scripts", "tests", "plugin/hooks"]
+files = ["src", "scripts", "site/scripts", "tests", "plugin/hooks"]
 exclude = [
     "scripts/fixture_capture_plugin",
     "vendor",

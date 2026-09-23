@@ -1,4 +1,4 @@
-.PHONY: setup check test test-fast sync-hot gen-redact regen-golden capture-fixtures coverage-hot bench-provider bench-hook e2e-cheap plugin-validate doctor clean
+.PHONY: setup check test test-fast sync-hot gen-redact regen-golden capture-fixtures coverage-hot bench-provider bench-hook e2e-cheap plugin-validate doctor clean site-data
 
 setup:
 	uv sync
@@ -23,6 +23,7 @@ check:
 	diff -r --exclude=__pycache__ --exclude=default_policy.json plugin/hooks/verdict_hot src/agent_verdict/verdict_hot
 	diff plugin/policies/default.json src/agent_verdict/verdict_hot/default_policy.json
 	uv run pytest tests/test_findings_ledger.py tests/test_import_ban.py tests/unit/test_ledger.py
+	uv run python site/scripts/check_replays.py
 
 test:
 	uv run pytest
@@ -52,6 +53,10 @@ plugin-validate:
 
 doctor:
 	uv run verdict doctor
+
+site-data:
+	uv run python site/scripts/build_replays.py
+	uv run python site/scripts/build_numbers.py
 
 clean:
 	rm -rf .mypy_cache .ruff_cache .pytest_cache dist
