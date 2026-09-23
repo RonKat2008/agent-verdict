@@ -1,0 +1,52 @@
+---
+import '../styles/tokens.css';
+import '../styles/typography.css';
+import '../styles/global.css';
+
+export interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = 'agent-verdict',
+  description = "A Claude Code plugin that records every tool result and blocks a stop when the final message claims something the results do not support.",
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <main id="main">
+      <slot />
+    </main>
+  </body>
+</html>
+
+<style>
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    background: var(--accent);
+    color: var(--ground);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius);
+    z-index: 100;
+    font-family: var(--font-sans);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .skip-link:focus {
+    left: var(--space-4);
+    top: var(--space-4);
+  }
+</style>

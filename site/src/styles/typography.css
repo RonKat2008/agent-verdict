@@ -1,0 +1,25 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --text-hero: clamp(2.25rem, 1rem + 4vw, 4.5rem);
+}
+
+body {
+  font-family: var(--font-sans);
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  line-height: 1.05;
+  margin: 0;
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--font-mono);
+}

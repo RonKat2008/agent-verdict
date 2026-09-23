@@ -1,0 +1,49 @@
+:root {
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--ground);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  /* A subtle 1px grid on the ground -- texture, not decoration. */
+  background-image:
+    linear-gradient(rgba(230, 232, 235, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(230, 232, 235, 0.035) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.container {
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  font-family: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

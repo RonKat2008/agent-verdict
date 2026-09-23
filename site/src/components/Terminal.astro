@@ -1,0 +1,139 @@
+---
+import type { TypeLine } from '../islands/typewriter';
+
+export interface Props {
+  lines: TypeLine[];
+  label?: string;
+}
+
+const { lines, label = 'verdict — shadow mode' } = Astro.props;
+const staticText = lines.map((l) => l.text).join('\n');
+---
+
+<div class="terminal">
+  <div class="terminal-bar">
+    <span class="dot dot-red" aria-hidden="true"></span>
+    <span class="dot dot-yellow" aria-hidden="true"></span>
+    <span class="dot dot-green" aria-hidden="true"></span>
+    <span class="terminal-title">{label}</span>
+  </div>
+  <pre class="term" data-lines={JSON.stringify(lines)} aria-label="Recorded session transcript">{staticText}</pre>
+</div>
+
+<script>
+  import { Typewriter, type TypeLine } from '../islands/typewriter';
+
+  document.querySelectorAll<HTMLPreElement>('.term').forEach((pre) => {
+    const raw = pre.dataset.lines;
+    if (!raw) return;
+    let lines: TypeLine[];
+    try {
+      lines = JSON.parse(raw) as TypeLine[];
+    } catch {
+      return;
+    }
+    pre.textContent = '';
+    const typewriter = new Typewriter(pre, lines);
+    void typewriter.start();
+  });
+</script>
+
+<style>
+  .terminal {
+    background: #101317;
+    border: 1px solid #1d2127;
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: 0 24px 64px -24px rgba(0, 0, 0, 0.6);
+  }
+
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background: #0e1114;
+    border-bottom: 1px solid #1d2127;
+  }
+
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .dot-red {
+    background: var(--block);
+  }
+
+  .dot-yellow {
+    background: var(--flag);
+  }
+
+  .dot-green {
+    background: var(--pass);
+  }
+
+  .terminal-title {
+    margin-left: var(--space-2);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  .term {
+    margin: 0;
+    padding: var(--space-5) var(--space-4);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+    min-height: 14rem;
+  }
+
+  .term :global(.line) {
+    color: var(--text);
+  }
+
+  .term :global(.line.cmd) {
+    color: var(--muted);
+  }
+
+  .term :global(.line.fail),
+  .term :global(.line.block) {
+    color: var(--block);
+    font-weight: 500;
+  }
+
+  .term :global(.line.claim) {
+    color: var(--text);
+  }
+
+  .term :global(.cursor) {
+    display: inline-block;
+    width: 0.55em;
+    height: 1em;
+    margin-left: 1px;
+    background: var(--accent);
+    vertical-align: text-bottom;
+    animation: verdict-blink 1s steps(1, jump-none) infinite;
+  }
+
+  .term :global(.cursor.done) {
+    animation: none;
+    opacity: 0;
+  }
+
+  @keyframes verdict-blink {
+    0%,
+    49% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
+  }
+</style>

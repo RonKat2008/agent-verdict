@@ -1,0 +1,37 @@
+{
+  "name": "agent-verdict-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check && eslint src --ext .ts && python3 scripts/check_replays.py",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "lhci": "lhci autorun"
+  },
+  "dependencies": {
+    "astro": "^5.0.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.0",
+    "@axe-core/playwright": "^4.10.0",
+    "@lhci/cli": "^0.14.0",
+    "@playwright/test": "^1.48.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "jsdom": "^25.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "allowScripts": {
+    "esbuild@0.27.7": true,
+    "esbuild@0.21.5": true,
+    "esbuild@0.25.12": true,
+    "fsevents@2.3.3": true,
+    "sharp@0.34.5": true
+  }
+}

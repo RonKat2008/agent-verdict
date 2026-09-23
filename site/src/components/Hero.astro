@@ -1,0 +1,151 @@
+---
+import fs from 'node:fs';
+import path from 'node:path';
+import Terminal from './Terminal.astro';
+import { parseBundle } from '../lib/bundle';
+import { heroScript } from '../lib/hero-script';
+
+// Resolved from process.cwd() (the `site/` project root `astro build`/`dev`
+// is run from), not from `import.meta.url`: Astro/Vite bundle this
+// component's compiled JS into a shared server chunk, so at runtime
+// `import.meta.url` points at that chunk's own location under `dist/`, not
+// at `src/components/Hero.astro` -- it cannot be used to find sibling data
+// files once bundled.
+const dataDir = path.join(process.cwd(), 'src', 'data');
+
+// Task 2's scenario bundle wins once it exists; until then the committed
+// fixture (built from tests/fixtures/site/unreported-failure via
+// `build_from`) gives the hero something real to render.
+const scenarioPath = path.join(dataDir, 'scenarios', 'unreported-failure.json');
+const fixturePath = path.join(dataDir, 'fixtures', 'unreported-failure.json');
+const bundlePath = fs.existsSync(scenarioPath) ? scenarioPath : fixturePath;
+const bundle = parseBundle(JSON.parse(fs.readFileSync(bundlePath, 'utf-8')));
+const lines = heroScript(bundle);
+
+const INSTALL_CMD = 'claude plugin install agent-verdict';
+---
+
+<section class="hero" aria-labelledby="hero-heading">
+  <div class="hero-grid container">
+    <div class="hero-copy">
+      <h1 id="hero-heading">The agent said the tests passed. They didn&rsquo;t.</h1>
+      <p class="subhead">
+        A Claude Code plugin that records every tool result and blocks a stop when the
+        final message claims something the results do not support.
+      </p>
+      <div class="install-row">
+        <code class="install-cmd mono">{INSTALL_CMD}</code>
+        <button type="button" class="copy-btn" data-copy={INSTALL_CMD} aria-label="Copy install command">
+          Copy
+        </button>
+      </div>
+      <a class="replay-link" href="#replay">Replay a session &darr;</a>
+    </div>
+    <div class="hero-terminal">
+      <Terminal lines={lines} label={`${bundle.name} — ${bundle.mode}`} />
+    </div>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>('.copy-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const text = btn.dataset.copy ?? '';
+      const original = btn.textContent;
+      navigator.clipboard
+        ?.writeText(text)
+        .then(() => {
+          btn.textContent = 'Copied';
+          setTimeout(() => {
+            btn.textContent = original;
+          }, 1500);
+        })
+        .catch(() => {
+          // Clipboard unavailable (permissions, insecure context); no-op.
+        });
+    });
+  });
+</script>
+
+<style>
+  .hero {
+    padding-block: var(--space-8) var(--space-7);
+  }
+
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: var(--space-7);
+    align-items: center;
+  }
+
+  @media (max-width: 768px) {
+    .hero-grid {
+      grid-template-columns: 1fr;
+      gap: var(--space-6);
+    }
+  }
+
+  .hero-copy h1 {
+    font-size: var(--text-hero);
+    letter-spacing: -0.02em;
+  }
+
+  .subhead {
+    margin-top: var(--space-5);
+    max-width: 46ch;
+    color: var(--muted);
+    font-size: 1.05rem;
+    line-height: 1.6;
+  }
+
+  .install-row {
+    margin-top: var(--space-6);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .install-cmd {
+    background: #12151a;
+    border: 1px solid #1d2127;
+    border-radius: var(--radius);
+    padding: var(--space-2) var(--space-4);
+    font-size: 0.9rem;
+    color: var(--text);
+  }
+
+  .copy-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: var(--radius);
+    padding: var(--space-2) var(--space-4);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  .copy-btn:hover,
+  .copy-btn:focus-visible {
+    background-color: var(--accent);
+    color: var(--ground);
+  }
+
+  .replay-link {
+    display: inline-block;
+    margin-top: var(--space-6);
+    color: var(--text);
+    text-decoration: none;
+    border-bottom: 1px solid var(--muted);
+    padding-bottom: 2px;
+    font-size: 0.95rem;
+  }
+
+  .replay-link:hover,
+  .replay-link:focus-visible {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+</style>
