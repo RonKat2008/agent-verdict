@@ -266,6 +266,20 @@ def check_bundle(bundle: dict[str, Any]) -> list[str]:
     if isinstance(questions, list):
         for i, q in enumerate(questions):
             _check_question(q, i, problems)
+        # `verdict`-kind events carry no question key of their own (I1);
+        # the site maps the nth `verdict` event to `questions[n]`
+        # positionally (`replay-player.ts`'s `verdictIndexForEvent`), so a
+        # count mismatch here would silently misattribute an answer to the
+        # wrong question on the timeline.
+        if isinstance(events, list):
+            verdict_event_count = sum(
+                1 for ev in events if isinstance(ev, dict) and ev.get("kind") == "verdict"
+            )
+            if len(questions) != verdict_event_count:
+                problems.append(
+                    f"questions: {len(questions)} question(s) but "
+                    f"{verdict_event_count} verdict event(s)"
+                )
     else:
         problems.append(f"questions: expected list, got {type(questions).__name__}")
 

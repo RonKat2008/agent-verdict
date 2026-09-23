@@ -4,6 +4,7 @@ import type { Bundle } from '../../src/lib/bundle';
 import { parseBundle } from '../../src/lib/bundle';
 import {
   ReplayPlayer,
+  autoplayState,
   decisionLabel,
   formatDecision,
   initScenarioTabs,
@@ -11,12 +12,43 @@ import {
 } from '../../src/islands/replay-player';
 import fixture from '../../src/data/fixtures/unreported-failure.json';
 
+/** jsdom has no `IntersectionObserver`; this records enough of the real API
+ * for `ReplayPlayer.setupAutoplayObserver` and lets a test fire a fake
+ * intersection entry on demand. */
+class MockIntersectionObserver {
+  static instances: MockIntersectionObserver[] = [];
+  readonly callback: IntersectionObserverCallback;
+  observedElement: Element | null = null;
+  disconnected = false;
+
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback;
+    MockIntersectionObserver.instances.push(this);
+  }
+
+  observe(el: Element): void {
+    this.observedElement = el;
+  }
+
+  unobserve(): void {}
+
+  disconnect(): void {
+    this.disconnected = true;
+  }
+
+  trigger(isIntersecting: boolean): void {
+    const entry = { isIntersecting, target: this.observedElement } as IntersectionObserverEntry;
+    this.callback([entry], this as unknown as IntersectionObserver);
+  }
+}
+
 /**
  * Builds the same DOM shape `Timeline.astro` and `VerdictPanel.astro`
- * render, at the "already revealed" (server-rendered, no-JS) state --
- * every row already carries `.revealed`, every prob is already at its
- * final value -- since that is what a real mount sees before `ReplayPlayer`
- * resets it. Selectors match the DOM contract in task-5-brief.md exactly.
+ * render, at the server-rendered, no-JS state -- every reveal-gated element
+ * carries `reveal ssr` (not `revealed`) and its final content, exactly as
+ * `ReplayPlayer` finds it before its first `restart()` strips `ssr` and
+ * resets everything. Selectors match the DOM contract in task-5-brief.md
+ * exactly.
  */
 function buildRoot(bundle: Bundle): HTMLElement {
   const root = document.createElement('div');
@@ -25,7 +57,7 @@ function buildRoot(bundle: Bundle): HTMLElement {
   timeline.setAttribute('data-timeline', '');
   bundle.events.forEach((event, index) => {
     const row = document.createElement('div');
-    row.className = 'row revealed';
+    row.className = 'row reveal ssr';
     row.dataset.seq = String(event.seq);
 
     // Mirrors Timeline.astro's server-rendered command cell exactly (same
@@ -56,12 +88,15 @@ function buildRoot(bundle: Bundle): HTMLElement {
   for (const q of bundle.questions) {
     const wrap = document.createElement('div');
     wrap.dataset.question = q.key;
+    const probRow = document.createElement('div');
+    probRow.className = 'prob-row reveal ssr';
     const prob = document.createElement('span');
     prob.setAttribute('data-prob', '');
     prob.textContent = (q.answer ?? 0).toFixed(2);
     const bar = document.createElement('span');
     bar.setAttribute('data-prob-bar', '');
-    wrap.append(prob, bar);
+    probRow.append(prob, bar);
+    wrap.appendChild(probRow);
     panel.appendChild(wrap);
   }
   for (const ruleId of ['R1', 'R2', 'R3', 'R4']) {
@@ -71,8 +106,12 @@ function buildRoot(bundle: Bundle): HTMLElement {
     panel.appendChild(row);
   }
   const decision = document.createElement('p');
+  decision.className = 'decision reveal ssr';
   decision.setAttribute('data-decision', '');
+  decision.setAttribute('aria-live', 'polite');
+  decision.setAttribute('aria-atomic', 'true');
   const reason = document.createElement('pre');
+  reason.className = 'reason reveal ssr';
   reason.setAttribute('data-reason', '');
   panel.append(decision, reason);
   root.appendChild(panel);
@@ -103,12 +142,19 @@ describe('ReplayPlayer', () => {
     root.remove();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    autoplayState.done = false;
+    MockIntersectionObserver.instances = [];
   });
 
-  it('starts reset: no revealed rows, position 0', () => {
+  it('mounting on SSR markup strips ssr and leaves rows unrevealed', () => {
     vi.useFakeTimers();
+    expect(root.querySelectorAll('.ssr').length).toBeGreaterThan(0);
+
     const player = new ReplayPlayer(root, bundle, { reducedMotion: false });
+
     expect(player.position).toBe(0);
+    expect(root.querySelectorAll('.ssr')).toHaveLength(0);
     expect(root.querySelectorAll('.revealed')).toHaveLength(0);
   });
 
@@ -181,7 +227,7 @@ describe('ReplayPlayer', () => {
     player.play();
 
     expect(player.position).toBe(bundle.events.length);
-    expect(root.querySelectorAll('.revealed')).toHaveLength(bundle.events.length);
+    expect(root.querySelectorAll('.row.revealed')).toHaveLength(bundle.events.length);
     expect(root.querySelector('[data-decision]')?.textContent).toBe('would block');
     for (const q of bundle.questions) {
       const cell = root.querySelector(`[data-question="${q.key}"] [data-prob]`);
@@ -216,6 +262,32 @@ describe('ReplayPlayer', () => {
     root.querySelector<HTMLButtonElement>('[data-restart]')?.click();
     expect(player.position).toBe(0);
   });
+
+  it('autoplays once the band scrolls into view (IntersectionObserver)', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    const player = new ReplayPlayer(root, bundle, { reducedMotion: false, stepMs: 100 });
+    expect(player.position).toBe(0);
+
+    const observer = MockIntersectionObserver.instances.at(-1);
+    expect(observer?.observedElement).toBe(root);
+
+    observer?.trigger(true);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(player.position).toBe(1);
+    expect(observer?.disconnected).toBe(true);
+  });
+
+  it('does not autoplay a second time on this page load', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    autoplayState.done = true;
+
+    new ReplayPlayer(root, bundle, { reducedMotion: false });
+
+    expect(MockIntersectionObserver.instances).toHaveLength(0);
+  });
 });
 
 describe('formatDecision', () => {
@@ -237,6 +309,18 @@ describe('formatDecision', () => {
       decision: { ...bundle.decision, action: 'pass', would_have: null },
     };
     expect(formatDecision(passBundle)).toEqual({ text: 'pass', effectiveAction: 'pass' });
+  });
+
+  it('renders gate_unavailable as "no verdict (provider unavailable)"', () => {
+    const bundle = parseBundle(fixture);
+    const gateBundle: Bundle = {
+      ...bundle,
+      decision: { ...bundle.decision, action: 'gate_unavailable', would_have: null, rule_id: null },
+    };
+    expect(formatDecision(gateBundle)).toEqual({
+      text: 'no verdict (provider unavailable)',
+      effectiveAction: 'gate_unavailable',
+    });
   });
 });
 

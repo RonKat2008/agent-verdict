@@ -1,13 +1,13 @@
 /**
  * Dependency-free replay player for a recorded scenario bundle. Drives the
  * timeline and verdict panel `Timeline.astro`/`VerdictPanel.astro` render
- * server-side: `Timeline`'s rows already carry the `revealed` class and
- * `VerdictPanel`'s probabilities/decision/reason are already at their final
- * values (so the page works with no JavaScript at all). On mount,
- * `ReplayPlayer` resets that DOM to the start of the replay and exposes
- * play/pause/step/restart so a visitor can watch the same events reveal
- * step by step. Rendering is direct DOM mutation; no framework, no
- * dependencies.
+ * server-side: rows, probability bars, the decision, and the reason all
+ * carry their final content and a `ssr` class (see the `.reveal`/`.ssr`
+ * rules in `styles/global.css`), so the page works with no JavaScript at
+ * all. On mount, `ReplayPlayer` strips `ssr` and resets that DOM to the
+ * start of the replay, then exposes play/pause/step/restart so a visitor
+ * can watch the same events reveal step by step. Rendering is direct DOM
+ * mutation; no framework, no dependencies.
  */
 
 import type { Action, Bundle } from '../lib/bundle';
@@ -21,6 +21,15 @@ const DEFAULT_STEP_MS = 1100;
 const COUNTUP_MS = 600;
 const COUNTUP_STEPS = 20;
 const COUNTUP_STEP_MS = COUNTUP_MS / COUNTUP_STEPS;
+const AUTOPLAY_THRESHOLD = 0.3;
+
+/**
+ * Whether any `ReplayPlayer` has already autoplayed once on this page load
+ * (module-scoped, so it is shared across every scenario tab's instance,
+ * not reset by switching tabs). Exported only so tests can reset it
+ * between cases -- consumers should never need to touch it.
+ */
+export const autoplayState = { done: false };
 
 function prefersReducedMotion(): boolean {
   if (typeof matchMedia !== 'function') return false;
@@ -32,15 +41,22 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * The DOM contract's `[data-decision]` text and color: in `shadow` mode the
- * hook never actually blocks, so the interesting fact for a visitor is what
- * it *would* have done. When `decision.would_have` is set and the bundle
- * was recorded in shadow mode, the text reads "would <action>" and the
- * color follows `would_have`; otherwise both follow `decision.action`
- * directly (an `enforce`-mode bundle, or a bundle with no would_have).
+ * The DOM contract's `[data-decision]` text and color: `gate_unavailable`
+ * (the provider itself couldn't be reached) reads as a plain, human
+ * sentence rather than the enum value verbatim, regardless of mode --
+ * there is no "would_have" to report when no verdict was ever reached. In
+ * `shadow` mode the hook never actually blocks, so the interesting fact
+ * for a visitor is what it *would* have done: when `decision.would_have`
+ * is set and the bundle was recorded in shadow mode, the text reads
+ * "would <action>" and the color follows `would_have`; otherwise both
+ * follow `decision.action` directly (an `enforce`-mode bundle, or a
+ * bundle with no would_have).
  */
 export function formatDecision(bundle: Bundle): { text: string; effectiveAction: Action } {
   const { decision, mode } = bundle;
+  if (decision.action === 'gate_unavailable') {
+    return { text: 'no verdict (provider unavailable)', effectiveAction: 'gate_unavailable' };
+  }
   if (mode === 'shadow' && decision.would_have) {
     return { text: `would ${decision.would_have}`, effectiveAction: decision.would_have };
   }
@@ -90,7 +106,11 @@ export class ReplayPlayer {
     this.wireControls();
     this.restart();
     if (this.reducedMotion) {
+      // Reduced motion jumps straight to the end -- no viewport-based
+      // autoplay is meaningful once we are already there.
       this.play();
+    } else {
+      this.setupAutoplayObserver();
     }
   }
 
@@ -99,6 +119,31 @@ export class ReplayPlayer {
     this.root.querySelector('[data-pause]')?.addEventListener('click', () => this.pause());
     this.root.querySelector('[data-step]')?.addEventListener('click', () => this.step());
     this.root.querySelector('[data-restart]')?.addEventListener('click', () => this.restart());
+  }
+
+  /**
+   * Autoplays once, the first time the replay band scrolls at least 30%
+   * into view -- still fully controllable (play/pause/step/restart keep
+   * working exactly as before, autoplay just calls the same `play()`).
+   * Scoped to `this.root` (the currently active scenario's section), so
+   * only the active tab can trigger it, and gated on the module-level
+   * `autoplayState` so it only ever fires once per page load even though
+   * switching tabs constructs a new `ReplayPlayer` each time.
+   */
+  private setupAutoplayObserver(): void {
+    if (autoplayState.done || typeof IntersectionObserver !== 'function') return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries.find((e) => e.target === this.root);
+        if (!entry?.isIntersecting || autoplayState.done) return;
+        autoplayState.done = true;
+        observer.disconnect();
+        this.play();
+      },
+      { threshold: AUTOPLAY_THRESHOLD },
+    );
+    observer.observe(this.root);
   }
 
   play(): void {
@@ -155,20 +200,20 @@ export class ReplayPlayer {
     this.pause();
     this.position = 0;
 
+    // `ssr` only needed to survive from server-render to this first reset;
+    // from here on visibility is driven purely by `revealed` (see the
+    // `.reveal`/`.ssr` rules in styles/global.css).
+    this.root.querySelectorAll('.ssr').forEach((el) => el.classList.remove('ssr'));
     this.root.querySelectorAll('.revealed').forEach((el) => el.classList.remove('revealed'));
     this.root.querySelectorAll('[data-rule]').forEach((el) => el.removeAttribute('aria-current'));
 
-    const decisionEl = this.root.querySelector<HTMLElement>('[data-decision]');
-    if (decisionEl) {
-      decisionEl.textContent = '';
-      decisionEl.className = 'decision';
-    }
+    const decisionEl = this.root.querySelector('[data-decision]');
+    if (decisionEl) decisionEl.textContent = '';
     const reasonEl = this.root.querySelector('[data-reason]');
     if (reasonEl) reasonEl.textContent = '';
 
     this.root.querySelectorAll('[data-prob]').forEach((el) => {
       el.textContent = '0.00';
-      el.classList.remove('prob-visible');
     });
     this.root.querySelectorAll<HTMLElement>('[data-prob-bar]').forEach((el) => {
       el.style.transform = 'scaleX(0)';
@@ -178,9 +223,10 @@ export class ReplayPlayer {
   private animateProbability(key: string, target: number): void {
     const cell = this.root.querySelector(`[data-question="${key}"] [data-prob]`);
     const bar = this.root.querySelector<HTMLElement>(`[data-question="${key}"] [data-prob-bar]`);
+    const row = this.root.querySelector(`[data-question="${key}"] .prob-row`);
     if (!cell) return;
 
-    cell.classList.add('prob-visible');
+    row?.classList.add('revealed');
 
     if (this.reducedMotion) {
       cell.textContent = target.toFixed(2);
@@ -210,11 +256,19 @@ export class ReplayPlayer {
 
     const decisionEl = this.root.querySelector<HTMLElement>('[data-decision]');
     if (decisionEl) {
+      // Set text/color via classList, not a full `className` reassignment,
+      // so the shared `reveal`/`revealed` classes (styles/global.css)
+      // survive alongside the action-color class.
       decisionEl.textContent = text;
-      decisionEl.className = `decision ${effectiveAction}`;
+      decisionEl.classList.add('reveal', 'revealed');
+      decisionEl.classList.remove('pass', 'flag', 'block', 'gate_unavailable');
+      decisionEl.classList.add(effectiveAction);
     }
     const reasonEl = this.root.querySelector('[data-reason]');
-    if (reasonEl) reasonEl.textContent = decision.reason;
+    if (reasonEl) {
+      reasonEl.textContent = decision.reason;
+      reasonEl.classList.add('revealed');
+    }
 
     if (decision.rule_id) {
       this.root.querySelectorAll('[data-rule]').forEach((el) => {

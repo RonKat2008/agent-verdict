@@ -340,6 +340,15 @@ def test_check_rejects_a_string_typed_t_ms_instead_of_raising(tmp_scenario: Path
     assert any("t_ms" in p for p in problems)
 
 
+def test_check_rejects_a_question_count_mismatched_with_verdict_events(
+    tmp_scenario: Path,
+) -> None:
+    bundle = build_replays.build_from(tmp_scenario)
+    bundle["questions"].append(dict(bundle["questions"][0]))
+    problems = check_replays.check_bundle(bundle)
+    assert any("verdict event" in p for p in problems)
+
+
 def test_check_rejects_bad_enum_values(tmp_scenario: Path) -> None:
     bundle = build_replays.build_from(tmp_scenario)
     bundle["decision"]["would_have"] = "maybe"

@@ -17,6 +17,15 @@ const {
 <!doctype html>
 <html lang="en">
   <head>
+    <!--
+      Synchronous (not type="module", and `is:inline` so Astro never hoists
+      or defers it) and the very first thing in <head>: it must run before
+      the body paints, so the replay band's `.reveal.ssr` content (see
+      global.css) starts hidden from the first frame in a JS-capable
+      browser instead of flashing its finished, server-rendered look for
+      one frame before ReplayPlayer's mount resets it.
+    -->
+    <script is:inline>document.documentElement.classList.add('js');</script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>{title}</title>

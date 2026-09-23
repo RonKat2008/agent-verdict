@@ -73,7 +73,7 @@ function statusText(event: BundleEvent): string {
     bundle.events.map((event, index) => {
       const content = commandContent(event, index);
       return (
-        <div class="row revealed" data-seq={event.seq}>
+        <div class="row reveal ssr" data-seq={event.seq}>
           <span class="cell seq mono">{event.seq}</span>
           <span class="cell t mono">{formatOffset(event.t_ms)}</span>
           <span class={`cell kind-badge kind-${event.kind}`}>{event.kind}</span>
@@ -110,14 +110,6 @@ function statusText(event: BundleEvent): string {
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius);
     background: #101317;
-    opacity: 0;
-    transform: translateY(4px);
-    transition: opacity 260ms var(--ease-out, ease), transform 260ms var(--ease-out, ease);
-  }
-
-  .row.revealed {
-    opacity: 1;
-    transform: none;
   }
 
   .cell {

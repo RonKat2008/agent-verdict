@@ -47,3 +47,41 @@ button {
     transition: none !important;
   }
 }
+
+/**
+ * Replay reveal mechanism (Timeline rows, VerdictPanel probability rows,
+ * decision, and reason): the server renders every one of these already at
+ * its final content, marked `ssr` instead of `revealed`.
+ *
+ * - No JS: `html` never gets the `js` class below, so `.reveal.ssr` is
+ *   simply visible -- the whole point of server-rendering the finished
+ *   state in the first place.
+ * - JS present: `Base.astro` adds `js` to `<html>` synchronously, in the
+ *   first line of `<head>`, before the body ever paints, so an unrevealed
+ *   `.reveal.ssr` element starts hidden from the very first frame --
+ *   there is no flash of the finished replay before `ReplayPlayer` resets
+ *   it. `ReplayPlayer`'s mount strips the `ssr` class entirely (its job
+ *   was only to survive from server-render to first script execution);
+ *   from then on a bare `.reveal` defaults to hidden, and `.reveal.revealed`
+ *   (added by `ReplayPlayer.step()`) is what reveals it, exactly the way
+ *   it already worked before `ssr` existed.
+ *
+ * Only opacity animates here, per the "transform and opacity only" rule --
+ * each component's own scoped styles own any layout/color/transform.
+ */
+.reveal {
+  opacity: 0;
+  transition: opacity 260ms ease;
+}
+
+.reveal.ssr {
+  opacity: 1;
+}
+
+html.js .reveal.ssr:not(.revealed) {
+  opacity: 0;
+}
+
+.reveal.revealed {
+  opacity: 1;
+}
