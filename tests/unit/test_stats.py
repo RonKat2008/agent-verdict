@@ -211,3 +211,33 @@ def test_breaker_open_reflects_the_breaker_state_file(
 
     result_open = stats.compute_stats()
     assert result_open.breaker_open is True
+
+
+def test_non_live_verdict_rows_are_counted(cli_verdict_home: Path) -> None:
+    """Final review I5: answers replayed from a cassette or injected by the
+    fake provider must be visible as such."""
+    base = {
+        "schema_v": 1,
+        "session_id": "s9",
+        "event": "verdict",
+        "prompt_id": "p1",
+        "agent_id": None,
+        "question_key": "claims_done",
+        "question_type": "noul",
+        "answer": {"type": "noul", "noul": 0.5},
+        "provider": "openrouter",
+        "model_returned": "m",
+        "input_tokens": 1,
+        "conn_ms": 0.0,
+        "infer_ms": 0.0,
+        "policy_version": "2026.09.1",
+    }
+    ledger.append_row({**base, "transport": "cassette"})
+    ledger.append_row({**base, "transport": "fake"})
+    ledger.append_row({**base, "transport": "live"})
+    ledger.append_row(base)  # pre-stamp rows count as live
+
+    result = stats.compute_stats()
+
+    assert result.non_live_verdicts == 2
+    assert result.to_dict()["non_live_verdicts"] == 2

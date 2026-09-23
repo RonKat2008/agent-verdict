@@ -50,6 +50,7 @@ class Stats:
     actions_by_kind: dict[str, int] = field(default_factory=dict)
     would_have_by_kind: dict[str, int] = field(default_factory=dict)
     gate_unavailable_count: int = 0
+    non_live_verdicts: int = 0
     breaker_open: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -68,6 +69,7 @@ class Stats:
             "actions_by_kind": dict(self.actions_by_kind),
             "would_have_by_kind": dict(self.would_have_by_kind),
             "gate_unavailable_count": self.gate_unavailable_count,
+            "non_live_verdicts": self.non_live_verdicts,
             "breaker_open": self.breaker_open,
         }
 
@@ -99,6 +101,7 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
     actions_by_kind: dict[str, int] = {}
     would_have_by_kind: dict[str, int] = {}
     gate_unavailable_count = 0
+    non_live_verdicts = 0
 
     for row in rows:
         event = row.get("event")
@@ -130,6 +133,9 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
             would_have = row.get("would_have")
             if isinstance(would_have, str):
                 would_have_by_kind[would_have] = would_have_by_kind.get(would_have, 0) + 1
+
+        elif event == "verdict" and row.get("transport", "live") != "live":
+            non_live_verdicts += 1  # final review I5: cassette/fake answers are visible in stats
 
         if row.get("never_send") is True:
             never_send_rows += 1
@@ -164,6 +170,7 @@ def _aggregate(rows: Iterable[Mapping[str, object]]) -> Stats:
         actions_by_kind=actions_by_kind,
         would_have_by_kind=would_have_by_kind,
         gate_unavailable_count=gate_unavailable_count,
+        non_live_verdicts=non_live_verdicts,
         breaker_open=Breaker().is_open(time.time()),
     )
 
