@@ -513,3 +513,24 @@ def test_regen_committed_fixture() -> None:
     the committed fixture from the real code path above, to be reviewed and
     committed like any other change."""
     _make_fixture(FIXTURE_DIR)
+
+
+def test_a_stop_after_the_last_action_is_never_paired_with_it(tmp_scenario: Path) -> None:
+    """Re-review: a cancelled Stop hook writes a stop row but no action row;
+    that trailing stop must not become the published final message."""
+    ledger_path = tmp_scenario / "ledger.jsonl"
+    rows = [json.loads(line) for line in ledger_path.read_text().splitlines() if line.strip()]
+    trailing = dict(next(r for r in rows if r.get("event") == "stop"))
+    trailing["final_message_excerpt"] = "SECOND STOP MESSAGE"
+    trailing["ts"] = float(rows[-1]["ts"]) + 1.0
+    ledger_path.write_text("".join(json.dumps(r) + "\n" for r in [*rows, trailing]))
+
+    bundle = build_replays.build_from(tmp_scenario)
+
+    assert "SECOND STOP MESSAGE" not in bundle["final_message"]
+
+
+def test_colon_prefixed_paths_are_rejected(tmp_scenario: Path) -> None:
+    bundle = build_replays.build_from(tmp_scenario)
+    bundle["events"][0]["command"] = "see:/Users/x/.ssh/id_rsa"
+    assert check_replays.check_bundle(bundle)

@@ -37,7 +37,7 @@ _GLOBAL_STRING_CAP = 2000
 
 # C1(b): a leading path separator (or one preceded by whitespace, a quote, a
 # paren, or "="), a home-relative path, or a Windows drive letter.
-_ABS_PATH_RE = re.compile(r"(^|[\s'\"(=])(/|~/|[A-Za-z]:\\)")
+_ABS_PATH_RE = re.compile(r"(?<![\w.\-])(/|~/|[A-Za-z]:\\)")
 _LOCAL_HOST_RE = re.compile(r"\b[A-Za-z0-9-]+\.(?:local|lan|internal)\b", re.IGNORECASE)
 _UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"

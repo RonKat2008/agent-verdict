@@ -125,6 +125,7 @@ def _last_decision_group(
     last_stop_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
     last_action: dict[str, Any] | None = None
     last_action_key: tuple[Any, Any] | None = None
+    last_action_stop: dict[str, Any] | None = None
     last_action_verdicts: list[dict[str, Any]] = []
     last_action_group_start = 0
 
@@ -143,15 +144,18 @@ def _last_decision_group(
             continue
         last_action = row
         last_action_key = key
+        # Snapshot the stop as of the action row (re-review): a stop written
+        # AFTER the last action (a cancelled Stop hook wrote no action row)
+        # must never be paired with a decision that did not see it.
+        last_action_stop = last_stop_by_key.get(key)
         last_action_verdicts = pending_verdicts.pop(key, [])
         last_action_group_start = verdict_start.pop(key, idx)
 
     if last_action is None or last_action_key is None:
         raise ValueError("ledger has no action row")
-    stop_row = last_stop_by_key.get(last_action_key)
-    if stop_row is None:
+    if last_action_stop is None:
         raise ValueError("no stop row shares the final action row's (prompt_id, agent_id)")
-    return last_action, stop_row, last_action_verdicts, last_action_group_start
+    return last_action, last_action_stop, last_action_verdicts, last_action_group_start
 
 
 def _rebuild(
@@ -179,7 +183,9 @@ def _questions(qs: dict[str, Any], verdicts: list[dict[str, Any]]) -> list[dict[
     for key, q in qs.items():
         statement = str(q.get("instructions", "")).split("\n\n")[0]
         ans = answers.get(key) or {}
-        value = ans.get("noul", ans.get("score", ans.get("choice")))
+        value = ans.get("noul", ans.get("score"))
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            value = None  # a choice answer has no numeric value the panel can show
         out.append(
             {
                 "key": key,

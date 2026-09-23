@@ -32,7 +32,9 @@ def d033_text(text: str | None = None) -> str:
     source = text if text is not None else DECISIONS.read_text(encoding="utf-8")
     start = source.find(_D033_START)
     if start == -1:
-        return source
+        raise MeasurementMissing(
+            f"{_D033_START} anchor not found; refusing to search the whole file"
+        )
     end = source.find(_D033_END, start)
     return source[start : end if end != -1 else None]
 

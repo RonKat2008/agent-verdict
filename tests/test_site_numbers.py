@@ -59,3 +59,8 @@ def test_written_file_matches_build(tmp_path: Path) -> None:
     out = tmp_path / "numbers.json"
     assert build_numbers.main(["--out", str(out)]) == 0
     assert json.loads(out.read_text(encoding="utf-8")) == build_numbers.build()
+
+
+def test_a_missing_d033_anchor_raises() -> None:
+    with pytest.raises(build_numbers.MeasurementMissing):
+        build_numbers.d033_text("no anchor here, Stop p50 1.0 ms, p95 2.0 ms")
