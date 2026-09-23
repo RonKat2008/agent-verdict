@@ -275,7 +275,7 @@ def _median_subprocess_ms(script: str, tmp_home: Path, runs: int = 12) -> float:
 
 @pytest.mark.slow
 @pytest.mark.skipif(not SYSTEM_PYTHON39.exists(), reason="no system Python 3.9 at /usr/bin/python3")
-def test_import_and_load_policy_delta_under_10ms(tmp_path: Path) -> None:
+def test_import_and_load_policy_delta_under_15ms(tmp_path: Path) -> None:
     """fix round 1 item 0 (D-028): re-measured after dropping `dataclasses`.
 
     D-028 replaced `Policy`'s frozen dataclass tree with `typing.NamedTuple`
@@ -287,15 +287,24 @@ def test_import_and_load_policy_delta_under_10ms(tmp_path: Path) -> None:
     call, minus the median of 12 runs importing only `json, os, re, sys`
     (the stdlib `policy.py`/`gates.py`/`claims.py` themselves need) --
     isolates what this task's code adds over that stdlib floor.
+
+    Budget history: <10 ms at M1 (measured 8.8 ms on the owner's Mac). M2
+    added the `stop`, `provider`, and `denylist` sections and split the
+    builders into `_policy_build.py`; re-measured 2026-09-22 with this
+    test's own method: 9.1 ms at `m2` vs 8.8 ms at `m1` on the owner's Mac,
+    12.5 ms on GitHub's ubuntu-latest runner (whose cold file reads are
+    slower), which failed the first M2 CI run. The budget is now 15 ms: it
+    still catches the ~8 ms `dataclasses` regression D-028 exists to
+    prevent, without a 10 percent margin that runner speed alone can eat.
     """
     tmp_home = tmp_path / "home"
     target_median = _median_subprocess_ms(_TARGET_SCRIPT, tmp_home)
     baseline_median = _median_subprocess_ms(_BASELINE_SCRIPT, tmp_home)
     delta_ms = target_median - baseline_median
-    assert delta_ms < 10, (
+    assert delta_ms < 15, (
         f"policy+gates+claims+load_policy() added {delta_ms:.2f}ms over the "
         f"json/os/re/sys baseline (target median {target_median:.2f}ms, "
-        f"baseline median {baseline_median:.2f}ms) -- budget is <10ms"
+        f"baseline median {baseline_median:.2f}ms) -- budget is <15ms"
     )
 
 
