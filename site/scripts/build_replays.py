@@ -10,18 +10,24 @@ scenario under `tests/fixtures/site/unreported-failure/` into
 (Task 4) has something real to render before the billed recorder
 (`scripts/record_site_scenarios.py`) has ever been run.
 
-`_rebuild` reconstructs the span/state/questions exactly the way
-`stop.py` built them for the stop being replayed -- from the ledger rows
-before that stop's own `verdict` rows (see `src/agent_verdict/replay.py`'s
-`_replay_session`, which does the same "decision-time prefix" walk for the
-same reason: a later row is real evidence for a later stop, never for this
-one).
+`_last_decision_group` finds the same "decision-time prefix" `stop.py`
+itself used for the FINAL decision in the file, mirroring
+`src/agent_verdict/replay.py`'s `_replay_session` (a later row is real
+evidence for a later stop, never for this one): it keys rows by
+`(prompt_id, agent_id)`, takes the LAST `action` row (a session can hold a
+retry with two stops under one prompt), the last `stop` row sharing its
+key, and that key's own `verdict` rows -- never merged across the whole
+session. `_events`, by contrast, is built from every row in the file (all
+retries, all stops), since the replay player shows the whole timeline; only
+the `decision`/`questions`/`final_message`/`model_returned` fields are
+scoped to the final decision group.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -42,6 +48,12 @@ OUT = ROOT / "site" / "src" / "data" / "scenarios"
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "site" / "unreported-failure"
 OUT_FIXTURES = ROOT / "site" / "src" / "data" / "fixtures"
 
+# C1: these four tools carry an absolute path (Write/Edit/NotebookEdit) or a
+# path-shaped structure (Read; _recorder_fields._raw_input_excerpt has no
+# special case for it, so its input_excerpt is a JSON-compact dump of the
+# whole tool_input) in input_excerpt -- never publish more than a basename.
+_PATH_TOOLS = frozenset({"Write", "Edit", "NotebookEdit", "Read"})
+
 
 def _cap(value: object, field: str) -> str:
     text = value if isinstance(value, str) else ""
@@ -57,14 +69,25 @@ def _tool(name: object) -> str | None:
     return name if name in rs.TOOLS else None
 
 
+def _command_for(tool_name: object, input_excerpt: object) -> str:
+    text = input_excerpt if isinstance(input_excerpt, str) else ""
+    if tool_name in _PATH_TOOLS:
+        token = text.split()[0] if text.split() else ""
+        text = os.path.basename(token) if token else ""
+    return _cap(text, "command")
+
+
 def _events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    stamps = [float(r["ts"]) for r in rows if isinstance(r.get("ts"), (int, float))]
+    # I2: t0 is the earliest EMITTED row's timestamp. session_start (and any
+    # other kind outside EVENT_KINDS) is never shown, so it must not shift
+    # the baseline either -- otherwise a real recording's first visible
+    # event would carry a dead lead-in instead of starting at t_ms 0.
+    emitted = [r for r in rows if r.get("event") in rs.EVENT_KINDS]
+    stamps = [float(r["ts"]) for r in emitted if isinstance(r.get("ts"), (int, float))]
     t0 = min(stamps) if stamps else 0.0
     out: list[dict[str, Any]] = []
-    for r in rows:
-        kind = r.get("event")
-        if kind not in rs.EVENT_KINDS:
-            continue
+    for r in emitted:
+        kind = r["event"]
         ts = float(r["ts"]) if isinstance(r.get("ts"), (int, float)) else t0
         out.append(
             {
@@ -72,27 +95,73 @@ def _events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "kind": kind,
                 "t_ms": max(0, int((ts - t0) * 1000)),
                 "tool": _tool(r.get("tool_name")),
-                "command": _cap(r.get("input_excerpt"), "command"),
+                "command": _command_for(r.get("tool_name"), r.get("input_excerpt")),
                 "status": r.get("status") if isinstance(r.get("status"), str) else None,
                 "exit_code": r.get("exit_code") if isinstance(r.get("exit_code"), int) else None,
-                "decision": r.get("action")
-                if kind == "action"
-                else (r.get("decision") if kind == "pre" else None),
+                # I1: "decision" is reserved for a PreToolUse rule's own
+                # verdict (rules.RuleDecision.decision is "deny"/"ask"/None
+                # -- never "allow", global-constraints.md); an "action"
+                # row's pass/flag/block/gate_unavailable outcome belongs to
+                # the top-level bundle["decision"] object (and this same
+                # event's own "rule_id" field), not here.
+                "decision": r.get("decision") if kind == "pre" else None,
                 "rule_id": r.get("rule_id") if kind == "action" else None,
             }
         )
     return out
 
 
+def _last_decision_group(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], int]:
+    """(action_row, stop_row, verdict_rows, group_start) for the LAST
+    `action` row's own decision group, keyed by `(prompt_id, agent_id)` --
+    the same grouping `src/agent_verdict/replay.py`'s `_replay_session`
+    uses. `group_start` is the index where this key's own `verdict` rows
+    began; `rows[:group_start]` is the decision-time prefix the span must
+    be built from (I3)."""
+    pending_verdicts: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
+    verdict_start: dict[tuple[Any, Any], int] = {}
+    last_stop_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
+    last_action: dict[str, Any] | None = None
+    last_action_key: tuple[Any, Any] | None = None
+    last_action_verdicts: list[dict[str, Any]] = []
+    last_action_group_start = 0
+
+    for idx, row in enumerate(rows):
+        event = row.get("event")
+        key = (row.get("prompt_id"), row.get("agent_id"))
+        if event == "stop":
+            last_stop_by_key[key] = row
+            continue
+        if event == "verdict":
+            if key not in pending_verdicts:
+                verdict_start[key] = idx
+            pending_verdicts.setdefault(key, []).append(row)
+            continue
+        if event != "action":
+            continue
+        last_action = row
+        last_action_key = key
+        last_action_verdicts = pending_verdicts.pop(key, [])
+        last_action_group_start = verdict_start.pop(key, idx)
+
+    if last_action is None or last_action_key is None:
+        raise ValueError("ledger has no action row")
+    stop_row = last_stop_by_key.get(last_action_key)
+    if stop_row is None:
+        raise ValueError("no stop row shares the final action row's (prompt_id, agent_id)")
+    return last_action, stop_row, last_action_verdicts, last_action_group_start
+
+
 def _rebuild(
-    rows: list[dict[str, Any]], stop_row: dict[str, Any], policy: policy_mod.Policy
+    span_rows: list[dict[str, Any]], stop_row: dict[str, Any], policy: policy_mod.Policy
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
-    """The span, state and questions exactly as stop.py built them: from the
-    rows before the first verdict row (see src/agent_verdict/replay.py)."""
-    first_verdict = next((i for i, r in enumerate(rows) if r.get("event") == "verdict"), len(rows))
+    """The span, state and questions exactly as stop.py built them for this
+    stop: `span_rows` is the caller's decision-time prefix (I3)."""
     raw_prompt_id = stop_row.get("prompt_id")
     prompt_id = raw_prompt_id if isinstance(raw_prompt_id, str) else None
-    span = span_mod.build_span(rows[:first_verdict], prompt_id, policy)
+    span = span_mod.build_span(span_rows, prompt_id, policy)
     raw_final = stop_row.get("final_message_excerpt")
     final = raw_final if isinstance(raw_final, str) else ""
     claim_list = claims_mod.extract_claims(final, policy)
@@ -131,7 +200,11 @@ def _reason(
 ) -> str:
     if action.get("rule_id") is None:
         return ""
-    answers = {v["question_key"]: v.get("answer") for v in verdicts}
+    answers = {
+        v["question_key"]: v.get("answer")
+        for v in verdicts
+        if isinstance(v.get("question_key"), str)
+    }
     claim_ids = tuple(f"c{i}" for i in range(1, n_claims + 1))
     decision = verdict_policy.decide(answers, span, policy, claim_ids)
     return _cap(decision.reason, "reason")
@@ -146,10 +219,8 @@ def build_from(scenario_dir: Path) -> dict[str, Any]:
         if line.strip()
     ]
     policy = policy_mod.load_policy(policy_mod.default_policy_path())
-    stop_row = next(r for r in rows if r.get("event") == "stop")
-    action = [r for r in rows if r.get("event") == "action"][-1]
-    verdicts = [r for r in rows if r.get("event") == "verdict"]
-    span, state, qs = _rebuild(rows, stop_row, policy)
+    action, stop_row, verdicts, group_start = _last_decision_group(rows)
+    span, state, qs = _rebuild(rows[:group_start], stop_row, policy)
     n_claims = len(state.get("untrusted", {}).get("claims", {}))
     return {
         "name": spec["name"],

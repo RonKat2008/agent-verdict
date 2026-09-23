@@ -33,6 +33,9 @@ EVENT_KINDS = frozenset({"prompt", "pre", "post", "post_fail", "stop", "verdict"
 QUESTION_KEYS = frozenset({"key", "type", "statement", "answer"})
 DECISION_KEYS = frozenset({"action", "would_have", "rule_id", "threshold_used", "reason"})
 ACTIONS = frozenset({"pass", "flag", "block", "gate_unavailable"})
+# "Read" stays here (not just Write/Edit/NotebookEdit): build_replays._events
+# publishes only a basename for all four of these path-carrying tools, so a
+# real "Read" event's `tool` field must still pass this membership check.
 TOOLS = frozenset({"Bash", "Read", "Write", "Edit", "NotebookEdit", "WebFetch", "Agent", "mcp"})
 SCENARIO_ORDER = (
     "unreported-failure",

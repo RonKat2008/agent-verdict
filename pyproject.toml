@@ -71,6 +71,15 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.mypy]
 strict = true
 python_version = "3.11"
+# "scripts" and "site/scripts" are two separate namespace-package roots
+# (neither directory has an __init__.py, so each .py file resolves to its
+# own bare top-level module name -- e.g. site/scripts/build_replays.py is
+# module "build_replays", not "scripts.build_replays"). This mirrors how
+# both directories are actually imported at runtime (pytest's `pythonpath`
+# for "scripts"; a `sys.path.insert` in each site/scripts/*.py and in
+# tests/test_site_replays.py for "site/scripts") -- a "site" directory can
+# never be a real dotted package regardless, since CPython always imports
+# the stdlib `site` module before any user code runs.
 files = ["src", "scripts", "site/scripts", "tests", "plugin/hooks"]
 exclude = [
     "scripts/fixture_capture_plugin",

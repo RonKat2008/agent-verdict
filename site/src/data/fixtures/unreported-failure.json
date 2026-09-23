@@ -98,7 +98,7 @@
     },
     {
       "command": "",
-      "decision": "pass",
+      "decision": null,
       "exit_code": null,
       "kind": "action",
       "rule_id": "R1",
