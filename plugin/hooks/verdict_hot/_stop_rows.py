@@ -40,12 +40,20 @@ def common_row(
 
 
 def open_failures(span: Span) -> list[str]:
+    return _tool_ids(span, span.unresolved_failures)
+
+
+def _tool_ids(span: Span, seqs: tuple[int, ...]) -> list[str]:
     by_seq = {s.seq: s for s in span.steps}
-    return [
-        by_seq[seq].tool_use_id
-        for seq in span.unresolved_failures
-        if seq in by_seq and by_seq[seq].tool_use_id
-    ]
+    return [by_seq[seq].tool_use_id for seq in seqs if seq in by_seq and by_seq[seq].tool_use_id]
+
+
+def listed_failures(span: Span) -> list[str]:
+    """Tool ids of only the seqs the `acks_failures` question named (final
+    review I6), so a high answer acknowledges nothing the model never saw."""
+    from .questions import listed_failure_seqs
+
+    return _tool_ids(span, listed_failure_seqs(span.unresolved_failures))
 
 
 def action_row(
@@ -103,7 +111,7 @@ def verdict_rows(
     policy: Policy,
     span: Span,
 ) -> list[dict[str, object]]:
-    listed_failures = open_failures(span)
+    listed = listed_failures(span)
     rows: list[dict[str, object]] = []
     for key, question in questions.items():
         row = common_row("verdict", session_id, prompt_id, agent_id)
@@ -121,7 +129,7 @@ def verdict_rows(
             }
         )
         if key == "acks_failures":
-            row["listed_failures"] = listed_failures
+            row["listed_failures"] = listed
         rows.append(row)
     return rows
 

@@ -464,3 +464,70 @@ def test_handle_never_raises_on_a_completely_malformed_payload(home: Path) -> No
 
     assert outcome.outcome == "gate_unavailable"
     assert outcome.stdout_json is None
+
+
+# --- Final review I6: acknowledgement covers only the failures the question named
+
+
+def _twelve_failures(prompt_id: str = "p1") -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = [
+        {"event": "prompt", "prompt_id": prompt_id, "prompt_excerpt": "fix it"}
+    ]
+    for i in range(12):
+        rows.append(
+            {
+                "event": "post_fail",
+                "prompt_id": prompt_id,
+                "tool_name": "Bash",
+                "tool_use_id": f"f{i}",
+                "input_excerpt": f"cmd{i}",
+                "status": "error",
+                "exit_code": 1,
+                "is_check": False,
+                "never_send": False,
+                "error_excerpt": "1 failed",
+            }
+        )
+    return rows
+
+
+def test_listed_failures_names_only_the_seqs_the_acks_question_listed(home: Path) -> None:
+    _seed("s1", _twelve_failures())
+
+    outcome = stop.handle(
+        _payload(last_message="All done, everything works."),
+        _POLICY,
+        time.monotonic(),
+        "k" * 40,
+        transport=_answer_transport({"claims_done": 0.9, "acks_failures": 0.95}),
+    )
+
+    acks = [r for r in outcome.rows if r.get("question_key") == "acks_failures"]
+    assert len(acks) == 1
+    listed = acks[0]["listed_failures"]
+    assert isinstance(listed, list) and len(listed) == 8
+    assert listed == [f"f{i}" for i in range(8)]
+
+
+def test_unlisted_failures_are_not_acknowledged_on_the_next_span(home: Path) -> None:
+    _seed("s1", _twelve_failures())
+    stop.handle(
+        _payload(last_message="All done, everything works."),
+        _POLICY,
+        time.monotonic(),
+        "k" * 40,
+        transport=_answer_transport({"claims_done": 0.9, "acks_failures": 0.95}),
+    )
+    _seed("s1", [{"event": "prompt", "prompt_id": "p2", "prompt_excerpt": "and now?"}])
+
+    from verdict_hot import span as span_mod
+
+    built = span_mod.build_span(ledger.read_session("s1"), "p2", _POLICY)
+
+    unresolved_ids = {s.tool_use_id for s in built.steps if s.seq in built.unresolved_failures}
+    assert {f"f{i}" for i in range(8, 12)} <= unresolved_ids
+    assert not any(
+        s.tool_use_id in {f"f{i}" for i in range(8)}
+        for s in built.steps
+        if not s.acknowledged and s.status == "error"
+    )

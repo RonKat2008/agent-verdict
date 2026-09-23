@@ -73,6 +73,14 @@ def _score(statement: str, levels: tuple[str, ...]) -> dict[str, object]:
 _MAX_LISTED_SEQS = 8
 
 
+def listed_failure_seqs(unresolved_failures: tuple[int, ...]) -> tuple[int, ...]:
+    """The seqs `acks_failures` names in its statement (final review I6):
+    at most `_MAX_LISTED_SEQS`. Acknowledgement must cover only these --
+    the model was told "and N more steps" about the rest, never their
+    numbers, so a yes cannot vouch for them."""
+    return tuple(unresolved_failures[:_MAX_LISTED_SEQS])
+
+
 def _step_phrase(seqs: tuple[int, ...]) -> tuple[str, str]:
     """Returns (a step-number phrase, matching verb "is"/"are"). Lists at
     most `_MAX_LISTED_SEQS` numbers, then "and N more steps" for the rest
