@@ -10,7 +10,7 @@ export interface Props {
 
 const {
   title = 'agent-verdict',
-  description = "A Claude Code plugin that records every tool result and blocks a stop when the final message claims something the results do not support.",
+  description = "A Claude Code plugin that records every Bash, file-edit, fetch, subagent and MCP result, and can block a stop when the final message claims something those results do not support.",
 } = Astro.props;
 ---
 

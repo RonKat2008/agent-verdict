@@ -543,3 +543,26 @@ def test_colon_prefixed_paths_are_rejected(tmp_scenario: Path) -> None:
     bundle = build_replays.build_from(tmp_scenario)
     bundle["events"][0]["command"] = "see:/Users/x/.ssh/id_rsa"
     assert check_replays.check_bundle(bundle)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "contact someone@example.com",
+        "id toolu_01GzUYFtnL9iBH2yd7XZVraZ",
+        "see ../../Users/x/secret",
+        "on ronits-MacBook-Pro today",
+    ],
+)
+def test_check_rejects_emails_tool_ids_traversal_and_machine_names(
+    tmp_scenario: Path, bad: str
+) -> None:
+    bundle = build_replays.build_from(tmp_scenario)
+    bundle["events"][0]["command"] = bad
+    assert check_replays.check_bundle(bundle)
+
+
+def test_check_still_allows_ordinary_ratios_and_dotted_words(tmp_scenario: Path) -> None:
+    bundle = build_replays.build_from(tmp_scenario)
+    bundle["events"][0]["command"] = "pass/fail ratio 1/2 in v1.2 and e.g. app.py"
+    assert not [p for p in check_replays.check_bundle(bundle) if "path" in p.lower()]

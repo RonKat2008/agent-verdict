@@ -35,7 +35,7 @@ const PROVIDERS: Option[] = [
  */
 const PRIVACY_SENTENCES = [
   'Starting with v0.2, the Stop and SubagentStop hooks send a redacted turn summary to your configured provider (OpenRouter by default) whenever the evidence gate (G-STOP) decides a stop needs judging.',
-  "What this request never carries: anything from a never-send path or command (those rows contribute only their structural fields, per the never-send section below), a full tool output, or file contents beyond what a tool printed inside the short excerpts above (an MCP tool's response body is treated as tool output and excerpted the same way).",
+  "What this request never carries: anything from a never-send path or command (those rows contribute only their structural fields, per the never-send list in PRIVACY.md), a full tool output, or file contents beyond what a tool printed inside the short excerpts above (an MCP tool's response body is treated as tool output and excerpted the same way).",
   "The provider's response is a small set of numeric judgments (`noul` values `0` to `1`, or a fixed-choice string) against a fixed question set — never free text back from the provider that gets stored or shown to you as-is.",
   "To keep this local: set the plugin's `provider` option (or `~/.verdict/policy.json`'s `provider` field) to `local-only`.",
 ];
@@ -93,11 +93,6 @@ function withInlineCode(value: string): string {
       {PRIVACY_SENTENCES.map((sentence) => <p set:html={withInlineCode(sentence)}></p>)}
     </div>
 
-    <nav class="install-links" aria-label="Project links">
-      <a href={REPO_URL}>Repository</a>
-      <a href={`${REPO_URL}/blob/main/docs/PRIVACY.md`}>PRIVACY.md</a>
-      <a href={`${REPO_URL}/blob/main/docs/CONSENT.md`}>CONSENT.md</a>
-    </nav>
   </div>
 </section>
 

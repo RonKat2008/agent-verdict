@@ -4,10 +4,20 @@ on:
     paths:
       - 'site/**'
       - '.github/workflows/site.yml'
+      - 'src/agent_verdict/verdict_hot/**'
+      - 'plugin/hooks/verdict_hot/**'
+      - 'pyproject.toml'
+      - 'tests/test_site_*.py'
+      - 'tests/fixtures/site/**'
   pull_request:
     paths:
       - 'site/**'
       - '.github/workflows/site.yml'
+      - 'src/agent_verdict/verdict_hot/**'
+      - 'plugin/hooks/verdict_hot/**'
+      - 'pyproject.toml'
+      - 'tests/test_site_*.py'
+      - 'tests/fixtures/site/**'
 permissions:
   contents: read
 concurrency:
