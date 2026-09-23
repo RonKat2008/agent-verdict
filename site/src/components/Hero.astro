@@ -140,13 +140,13 @@ const INSTALL_CMD = 'claude plugin install agent-verdict';
     padding: var(--space-2) var(--space-4);
     font-size: 0.85rem;
     cursor: pointer;
-    transition: background-color 150ms ease, color 150ms ease;
+    transition: opacity 150ms ease, transform 150ms ease;
   }
 
   .copy-btn:hover,
   .copy-btn:focus-visible {
-    background-color: var(--accent);
-    color: var(--ground);
+    opacity: 0.75;
+    transform: translateY(-1px);
   }
 
   .replay-link {

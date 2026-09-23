@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap');
+/* Font faces load via <link rel="preconnect"/stylesheet"> in Base.astro's
+   head, not a CSS @import (an @import blocks the CSSOM on a second
+   round-trip before the browser even discovers the font request). */
 
 :root {
   /* Upper clamp trimmed from 4.5rem: at the 1440 hero column width the first
